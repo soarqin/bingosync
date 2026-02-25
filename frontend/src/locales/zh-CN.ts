@@ -73,6 +73,18 @@ export default {
     bingo: '完成连线 Bingo!',
     fullBoard: '棋盘已满',
     blackout: '完成全部涂色!',
+    phase: '结算完成',
+  },
+  phase: {
+    settle: '结算',
+    settled: '已结算',
+    canSettle: '可以结算',
+    bingo: 'Bingo!',
+    bingoAchieved: '获得Bingo奖励',
+    firstSettler: '先结算奖励',
+    rowUnlocked: '行已解锁',
+    rowLocked: '行已锁定',
+    rightClickToClear: '右键清除自己的颜色',
   },
   settings: {
     roomPassword: '房间密码',
@@ -84,15 +96,51 @@ export default {
     importHint: '支持 .txt (每行一个) 或 .csv (每行5个)',
     importFailed: '文件导入失败',
     phaseConfig: {
-      rowScores: '每行积分',
-      secondHalfRate: '后涂色积分比例',
-      finalBonus: '最终结算额外积分',
-      cellsPerRow: '每行每人最多涂色数',
-      unlockThreshold: '解锁下一行所需涂色数',
+      rowScores: '每行积分 (A)',
+      secondHalfScores: '后涂色积分 (B)',
+      cellsPerRow: '每行每人最多涂色数 (C)',
+      unlockThreshold: '解锁下一行所需涂色数 (D)',
+      bingoBonus: 'Bingo奖励积分 (E)',
+      finalBonus: '结算奖励积分 (F)',
     },
   },
   cellEdit: {
     title: '编辑格子文字',
     placeholder: '输入格子显示的文字',
+  },
+  errors: {
+    // Game errors
+    'game has not started': '游戏尚未开始',
+    'game already finished': '游戏已结束',
+    'game already in progress': '游戏进行中',
+    'cell already marked': '格子已被标记',
+    'player already marked this cell': '你已经标记过这个格子',
+    'row is locked': '该行已被锁定',
+    'row mark limit exceeded': '该行标记数量已达上限',
+    'invalid cell position': '无效的格子位置',
+    'must provide exactly 25 texts': '必须提供25个文字',
+    
+    // Settlement errors
+    'player already settled': '已经结算',
+    'need at least 2 cells in row 5 to settle': '第5行至少需要2个格子才能结算',
+    'can only settle for yourself': '只能为自己结算',
+    'spectators cannot settle': '观众无法结算',
+    
+    // Room errors
+    'room not found': '房间不存在',
+    'room is full': '房间已满',
+    'wrong password': '密码错误',
+    'only room owner can do this': '只有房主可以执行此操作',
+    'game in progress': '游戏进行中',
+    'user not found': '用户不存在',
+    'player already set for this color': '该颜色已有玩家',
+    
+    // Permission errors
+    'can only mark your own color': '只能标记自己的颜色',
+    'spectators cannot mark cells': '观众无法标记格子',
+    'only referee can unmark cells': '只有裁判可以取消标记',
+    'spectators cannot clear marks': '观众无法清除标记',
+    'can only clear your own color': '只能清除自己的颜色',
+    'can only set cell text in waiting state': '只能在等待状态设置格子文字',
   },
 };

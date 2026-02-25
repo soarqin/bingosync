@@ -205,7 +205,11 @@ func (r *Room) MarkCell(userID string, row, col int, playerColor game.PlayerColo
 	// Check permissions
 	switch u.Role {
 	case user.RoleReferee:
-		// Can mark any color, force overwrite
+		// In blackout and phase rules, referee can mark as second player (not force overwrite)
+		// In normal rule, referee still uses force overwrite
+		if r.Game.Rule == game.RuleBlackout || r.Game.Rule == game.RulePhase {
+			return r.Game.MarkCell(row, col, playerColor)
+		}
 		return r.Game.MarkCellForce(row, col, playerColor)
 	case user.RolePlayer:
 		// Can only mark own color
@@ -234,6 +238,32 @@ func (r *Room) UnmarkCell(userID string, row, col int) error {
 	}
 
 	return r.Game.UnmarkCell(row, col)
+}
+
+// ClearCellMark clears a specific color mark from a cell
+// For blackout and phase rules where both colors can mark the same cell
+func (r *Room) ClearCellMark(userID string, row, col int, playerColor game.PlayerColor) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	u, exists := r.Users[userID]
+	if !exists {
+		return ErrUserNotFound
+	}
+
+	// Only referee or the player who marked can clear
+	if u.Role == user.RoleSpectator {
+		return errors.New("spectators cannot clear marks")
+	}
+
+	// Players can only clear their own color
+	if u.Role == user.RolePlayer {
+		if playerColor != game.PlayerColor(u.PlayerColor) {
+			return errors.New("can only clear your own color")
+		}
+	}
+
+	return r.Game.ClearCellMark(row, col, playerColor)
 }
 
 // ResetGame resets the game board (only owner can do this)
@@ -279,6 +309,33 @@ func (r *Room) SetAllCellTexts(callerID string, texts []string) error {
 	}
 
 	return r.Game.SetAllCellTexts(texts)
+}
+
+// Settle triggers settlement for a player in phase rule
+// Player can settle for themselves, or referee can settle for players
+func (r *Room) Settle(callerID string, playerColor game.PlayerColor) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	u, exists := r.Users[callerID]
+	if !exists {
+		return ErrUserNotFound
+	}
+
+	// Check permissions: player can settle themselves, referee can settle anyone
+	switch u.Role {
+	case user.RoleReferee:
+		// Can settle for any player
+	case user.RolePlayer:
+		// Can only settle for themselves
+		if game.PlayerColor(u.PlayerColor) != playerColor {
+			return errors.New("can only settle for yourself")
+		}
+	case user.RoleSpectator:
+		return errors.New("spectators cannot settle")
+	}
+
+	return r.Game.Settle(playerColor)
 }
 
 // GetState returns the current room state

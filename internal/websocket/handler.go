@@ -117,10 +117,14 @@ func (h *Handler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleMarkCell(socket, &msg)
 	case protocol.MsgUnmarkCell:
 		h.handleUnmarkCell(socket, &msg)
+	case protocol.MsgClearCellMark:
+		h.handleClearCellMark(socket, &msg)
 	case protocol.MsgResetGame:
 		h.handleResetGame(socket, &msg)
 	case protocol.MsgSetCellText:
 		h.handleSetCellText(socket, &msg)
+	case protocol.MsgSettle:
+		h.handleSettle(socket, &msg)
 	default:
 		h.sendError(socket, 400, "unknown message type")
 	}
@@ -376,22 +380,28 @@ func (h *Handler) handleSetRule(socket *gws.Conn, msg *protocol.Message) {
 	
 	rule := game.GameRuleFromString(payload.Rule)
 	config := game.DefaultPhaseConfig()
-	
+
 	if len(payload.PhaseConfig.RowScores) == 5 {
 		for i, v := range payload.PhaseConfig.RowScores {
 			config.RowScores[i] = v
 		}
 	}
-	if payload.PhaseConfig.SecondHalfRate > 0 {
-		config.SecondHalfRate = payload.PhaseConfig.SecondHalfRate
+	if len(payload.PhaseConfig.SecondHalfScores) == 5 {
+		for i, v := range payload.PhaseConfig.SecondHalfScores {
+			config.SecondHalfScores[i] = v
+		}
 	}
-	config.FinalBonus = payload.PhaseConfig.FinalBonus
-	config.FinalBonusType = payload.PhaseConfig.FinalBonusType
 	if payload.PhaseConfig.CellsPerRow > 0 {
 		config.CellsPerRow = payload.PhaseConfig.CellsPerRow
 	}
 	if payload.PhaseConfig.UnlockThreshold > 0 {
 		config.UnlockThreshold = payload.PhaseConfig.UnlockThreshold
+	}
+	if payload.PhaseConfig.BingoBonus > 0 {
+		config.BingoBonus = payload.PhaseConfig.BingoBonus
+	}
+	if payload.PhaseConfig.FinalBonus > 0 {
+		config.FinalBonus = payload.PhaseConfig.FinalBonus
 	}
 	
 	if err := r.SetGameRule(msg.UserID, rule, config); err != nil {
@@ -481,6 +491,35 @@ func (h *Handler) handleUnmarkCell(socket *gws.Conn, msg *protocol.Message) {
 	h.broadcastRoomState(r)
 }
 
+// handleClearCellMark handles clearing a specific color mark from a cell
+func (h *Handler) handleClearCellMark(socket *gws.Conn, msg *protocol.Message) {
+	var payload protocol.ClearCellMarkPayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		h.sendError(socket, 400, "invalid payload")
+		return
+	}
+
+	u := h.userManager.GetUser(msg.UserID)
+	if u == nil || u.RoomID == "" {
+		h.sendError(socket, 404, "user not in room")
+		return
+	}
+
+	r := h.roomManager.GetRoom(u.RoomID)
+	if r == nil {
+		h.sendError(socket, 404, "room not found")
+		return
+	}
+
+	color := game.PlayerColorFromString(payload.Color)
+	if err := r.ClearCellMark(msg.UserID, payload.Row, payload.Col, color); err != nil {
+		h.sendError(socket, 403, err.Error())
+		return
+	}
+
+	h.broadcastRoomState(r)
+}
+
 // handleResetGame handles resetting a game
 func (h *Handler) handleResetGame(socket *gws.Conn, msg *protocol.Message) {
 	u := h.userManager.GetUser(msg.UserID)
@@ -533,6 +572,35 @@ func (h *Handler) handleSetCellText(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	if err != nil {
+		h.sendError(socket, 403, err.Error())
+		return
+	}
+
+	h.broadcastRoomState(r)
+}
+
+// handleSettle handles settlement for phase rule
+func (h *Handler) handleSettle(socket *gws.Conn, msg *protocol.Message) {
+	var payload protocol.SettlePayload
+	if err := json.Unmarshal(msg.Payload, &payload); err != nil {
+		h.sendError(socket, 400, "invalid payload")
+		return
+	}
+
+	u := h.userManager.GetUser(msg.UserID)
+	if u == nil || u.RoomID == "" {
+		h.sendError(socket, 404, "user not in room")
+		return
+	}
+
+	r := h.roomManager.GetRoom(u.RoomID)
+	if r == nil {
+		h.sendError(socket, 404, "room not found")
+		return
+	}
+
+	player := game.PlayerColorFromString(payload.Player)
+	if err := r.Settle(msg.UserID, player); err != nil {
 		h.sendError(socket, 403, err.Error())
 		return
 	}
@@ -613,9 +681,10 @@ func convertGame(g *game.Game) protocol.GamePayload {
 		cells[i] = make([]protocol.CellPayload, 5)
 		for j := 0; j < 5; j++ {
 			cells[i][j] = protocol.CellPayload{
-				MarkedBy: g.Board.Cells[i][j].MarkedBy.String(),
-				Times:    g.Board.Cells[i][j].Times,
-				Text:     g.Board.Cells[i][j].Text,
+				MarkedBy:   g.Board.Cells[i][j].MarkedBy.String(),
+				SecondMark: g.Board.Cells[i][j].SecondMark.String(),
+				Times:      g.Board.Cells[i][j].Times,
+				Text:       g.Board.Cells[i][j].Text,
 			}
 		}
 	}
@@ -634,24 +703,30 @@ func convertGame(g *game.Game) protocol.GamePayload {
 		Board: protocol.BoardPayload{
 			Cells: cells,
 		},
-		Rule:         g.Rule.String(),
-		PhaseConfig:  convertPhaseConfig(g.PhaseConfig),
-		Status:       g.Status.String(),
-		Winner:       winner,
-		RedRowMarks:  g.RedRowMarks[:],
-		BlueRowMarks: g.BlueRowMarks[:],
-		CurrentRow:   g.CurrentRow,
+		Rule:            g.Rule.String(),
+		PhaseConfig:     convertPhaseConfig(g.PhaseConfig),
+		Status:          g.Status.String(),
+		Winner:          winner,
+		RedRowMarks:     g.RedRowMarks[:],
+		BlueRowMarks:    g.BlueRowMarks[:],
+		RedUnlockedRow:  g.RedUnlockedRow,
+		BlueUnlockedRow: g.BlueUnlockedRow,
+		BingoAchiever:   g.BingoAchiever.String(),
+		BingoLine:       g.BingoLine,
+		RedSettled:      g.RedSettled,
+		BlueSettled:     g.BlueSettled,
+		FirstSettler:    g.FirstSettler.String(),
 	}
 }
 
 func convertPhaseConfig(c game.PhaseConfig) protocol.PhaseConfigPayload {
 	return protocol.PhaseConfigPayload{
-		RowScores:       c.RowScores[:],
-		SecondHalfRate:  c.SecondHalfRate,
-		FinalBonus:      c.FinalBonus,
-		FinalBonusType:  c.FinalBonusType,
-		CellsPerRow:     c.CellsPerRow,
-		UnlockThreshold: c.UnlockThreshold,
+		RowScores:        c.RowScores[:],
+		SecondHalfScores: c.SecondHalfScores[:],
+		CellsPerRow:      c.CellsPerRow,
+		UnlockThreshold:  c.UnlockThreshold,
+		BingoBonus:       c.BingoBonus,
+		FinalBonus:       c.FinalBonus,
 	}
 }
 

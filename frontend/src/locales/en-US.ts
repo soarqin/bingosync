@@ -73,6 +73,18 @@ export default {
     bingo: 'Bingo!',
     fullBoard: 'Board is full',
     blackout: 'Complete blackout!',
+    phase: 'Settlement complete',
+  },
+  phase: {
+    settle: 'Settle',
+    settled: 'Settled',
+    canSettle: 'Can settle',
+    bingo: 'Bingo!',
+    bingoAchieved: 'Bingo bonus awarded',
+    firstSettler: 'First settler bonus',
+    rowUnlocked: 'Row unlocked',
+    rowLocked: 'Row locked',
+    rightClickToClear: 'Right-click to clear your color',
   },
   settings: {
     roomPassword: 'Room Password',
@@ -84,15 +96,51 @@ export default {
     importHint: 'Supports .txt (one per line) or .csv (5 per line)',
     importFailed: 'File import failed',
     phaseConfig: {
-      rowScores: 'Row Scores',
-      secondHalfRate: 'Second Half Rate',
-      finalBonus: 'Final Bonus',
-      cellsPerRow: 'Max Cells Per Row',
-      unlockThreshold: 'Unlock Threshold',
+      rowScores: 'Row Scores (A)',
+      secondHalfScores: 'Second Half Scores (B)',
+      cellsPerRow: 'Max Cells Per Row (C)',
+      unlockThreshold: 'Unlock Threshold (D)',
+      bingoBonus: 'Bingo Bonus (E)',
+      finalBonus: 'Final Bonus (F)',
     },
   },
   cellEdit: {
     title: 'Edit Cell Text',
     placeholder: 'Enter cell text',
+  },
+  errors: {
+    // Game errors
+    'game has not started': 'Game has not started',
+    'game already finished': 'Game already finished',
+    'game already in progress': 'Game already in progress',
+    'cell already marked': 'Cell already marked',
+    'player already marked this cell': 'You already marked this cell',
+    'row is locked': 'Row is locked',
+    'row mark limit exceeded': 'Row mark limit exceeded',
+    'invalid cell position': 'Invalid cell position',
+    'must provide exactly 25 texts': 'Must provide exactly 25 texts',
+    
+    // Settlement errors
+    'player already settled': 'Player already settled',
+    'need at least 2 cells in row 5 to settle': 'Need at least 2 cells in row 5 to settle',
+    'can only settle for yourself': 'Can only settle for yourself',
+    'spectators cannot settle': 'Spectators cannot settle',
+    
+    // Room errors
+    'room not found': 'Room not found',
+    'room is full': 'Room is full',
+    'wrong password': 'Wrong password',
+    'only room owner can do this': 'Only room owner can do this',
+    'game in progress': 'Game in progress',
+    'user not found': 'User not found',
+    'player already set for this color': 'Player already set for this color',
+    
+    // Permission errors
+    'can only mark your own color': 'Can only mark your own color',
+    'spectators cannot mark cells': 'Spectators cannot mark cells',
+    'only referee can unmark cells': 'Only referee can unmark cells',
+    'spectators cannot clear marks': 'Spectators cannot clear marks',
+    'can only clear your own color': 'Can only clear your own color',
+    'can only set cell text in waiting state': 'Can only set cell text in waiting state',
   },
 };

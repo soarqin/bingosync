@@ -10,10 +10,10 @@
           <span v-if="redPlayer && isRoomOwner(redPlayer.id)" class="owner-tag">{{ t('room.owner') }}</span>
         </span>
         <template v-if="redPlayer">
-          <button v-if="redPlayer.id === currentUser?.id" @click="becomeSpectator">{{ t('common.cancel') }}</button>
+          <button v-if="redPlayer.id === currentUser?.id" @click="becomeSpectator">{{ t('player.becomeSpectator') }}</button>
           <button v-else-if="isOwner" @click="removeRole(redPlayer.id)">{{ t('player.remove') }}</button>
         </template>
-        <button v-else-if="canAssign" @click="becomePlayer('red')">{{ t('common.save') }}</button>
+        <button v-else-if="canAssign" @click="becomePlayer('red')">{{ t('player.becomeRed') }}</button>
       </div>
       
       <div class="player blue">
@@ -23,10 +23,10 @@
           <span v-if="bluePlayer && isRoomOwner(bluePlayer.id)" class="owner-tag">{{ t('room.owner') }}</span>
         </span>
         <template v-if="bluePlayer">
-          <button v-if="bluePlayer.id === currentUser?.id" @click="becomeSpectator">{{ t('common.cancel') }}</button>
+          <button v-if="bluePlayer.id === currentUser?.id" @click="becomeSpectator">{{ t('player.becomeSpectator') }}</button>
           <button v-else-if="isOwner" @click="removeRole(bluePlayer.id)">{{ t('player.remove') }}</button>
         </template>
-        <button v-else-if="canAssign" @click="becomePlayer('blue')">{{ t('common.save') }}</button>
+        <button v-else-if="canAssign" @click="becomePlayer('blue')">{{ t('player.becomeBlue') }}</button>
       </div>
     </div>
 
@@ -38,10 +38,10 @@
           <span v-if="referee && isRoomOwner(referee.id)" class="owner-tag">{{ t('room.owner') }}</span>
         </span>
         <template v-if="referee">
-          <button v-if="referee.id === currentUser?.id" @click="becomeSpectator">{{ t('common.cancel') }}</button>
+          <button v-if="referee.id === currentUser?.id" @click="becomeSpectator">{{ t('player.becomeSpectator') }}</button>
           <button v-else-if="isOwner" @click="removeRole(referee.id)">{{ t('player.remove') }}</button>
         </template>
-        <button v-else-if="canAssign" @click="becomeReferee">{{ t('common.save') }}</button>
+        <button v-else-if="canAssign" @click="becomeReferee">{{ t('player.becomeReferee') }}</button>
       </div>
     </div>
 

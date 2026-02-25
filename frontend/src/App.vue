@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, onMounted, computed, watch } from 'vue';
+import { ref, onMounted, computed, watch, provide } from 'vue';
 import BingoBoard from './components/BingoBoard.vue';
 import RoomList from './components/RoomList.vue';
 import RoomSettings from './components/RoomSettings.vue';
@@ -24,19 +24,77 @@ const {
   markCell,
   unmarkCell,
   leaveRoom,
-  setName
+  setName,
+  settle
 } = useWebSocket();
 
 const { t } = localeStore;
 
 const serverUrl = ref('ws://localhost:8765/ws');
 const playerName = ref('');
+const selectedColor = ref<PlayerColor>('none');
+const bingoBoardRef = ref<InstanceType<typeof BingoBoard> | null>(null);
 
 const connected = computed(() => store.connected);
 const connecting = computed(() => store.connecting);
 const inRoom = computed(() => store.inRoom);
 const game = computed(() => store.game);
 const currentRoom = computed(() => store.currentRoom);
+
+// Settlement related computed properties
+const isCurrentPlayerSettled = computed(() => {
+  if (!game.value) return false;
+  const color = store.currentUser?.player_color;
+  if (color === 'red') return game.value.red_settled ?? false;
+  if (color === 'blue') return game.value.blue_settled ?? false;
+  return false;
+});
+
+const canSettleNow = computed(() => {
+  if (!game.value) return false;
+  
+  // If someone already settled first, second player can settle without conditions
+  if (game.value.first_settler && game.value.first_settler !== 'none') {
+    return true;
+  }
+  
+  // First settler must meet conditions
+  const color = store.currentUser?.player_color;
+  if (color === 'red') {
+    return (game.value.red_row_marks?.[4] ?? 0) >= 2;
+  }
+  if (color === 'blue') {
+    return (game.value.blue_row_marks?.[4] ?? 0) >= 2;
+  }
+  return false;
+});
+
+const canRedSettle = computed(() => {
+  if (!game.value) return false;
+  
+  // If someone already settled first, red can settle without conditions
+  if (game.value.first_settler && game.value.first_settler !== 'none') {
+    return true;
+  }
+  
+  // Otherwise must meet conditions
+  return (game.value.red_row_marks?.[4] ?? 0) >= 2;
+});
+
+const canBlueSettle = computed(() => {
+  if (!game.value) return false;
+  
+  // If someone already settled first, blue can settle without conditions
+  if (game.value.first_settler && game.value.first_settler !== 'none') {
+    return true;
+  }
+  
+  // Otherwise must meet conditions
+  return (game.value.blue_row_marks?.[4] ?? 0) >= 2;
+});
+
+// Provide selectedColor to child components (BingoBoard)
+provide('selectedColor', selectedColor);
 
 async function handleConnect() {
   if (connected.value) {
@@ -72,6 +130,119 @@ function handleLeaveRoom() {
   leaveRoom();
 }
 
+// File input ref for import
+const fileInputRef = ref<HTMLInputElement | null>(null);
+
+function handleImportClick() {
+  fileInputRef.value?.click();
+}
+
+async function handleFileImport(event: Event) {
+  const file = (event.target as HTMLInputElement).files?.[0];
+  if (!file) return;
+  
+  try {
+    const text = await file.text();
+    let texts: string[] = [];
+    
+    if (file.name.toLowerCase().endsWith('.txt')) {
+      // TXT: one per line, 25 lines total
+      const lines = text.split('\n').map(line => {
+        return line.trim().replace(/\\n/g, '\n');
+      }).filter(line => line.length > 0);
+      texts = lines.slice(0, 25);
+    } else if (file.name.toLowerCase().endsWith('.csv')) {
+      // CSV: 5 per line, 5 lines total
+      const lines = text.split('\n').slice(0, 5);
+      for (const line of lines) {
+        const cols = parseCSVLine(line);
+        texts.push(...cols.slice(0, 5));
+      }
+    }
+    
+    // Ensure 25 elements
+    while (texts.length < 25) {
+      texts.push('');
+    }
+    texts = texts.slice(0, 25);
+    
+    // Use WebSocket to set all cell texts
+    const { setAllCellTexts } = useWebSocket();
+    setAllCellTexts(texts);
+  } catch (e) {
+    console.error('Failed to import file:', e);
+    store.setError(t('settings.importFailed'));
+  }
+  
+  // Reset file input
+  (event.target as HTMLInputElement).value = '';
+}
+
+function parseCSVLine(line: string): string[] {
+  const result: string[] = [];
+  let current = '';
+  let inQuotes = false;
+  
+  for (let i = 0; i < line.length; i++) {
+    const char = line[i];
+    
+    if (char === '"') {
+      if (inQuotes && line[i + 1] === '"') {
+        current += '"';
+        i++;
+      } else {
+        inQuotes = !inQuotes;
+      }
+    } else if (char === ',' && !inQuotes) {
+      result.push(current.trim());
+      current = '';
+    } else {
+      current += char;
+    }
+  }
+  
+  result.push(current.trim());
+  return result;
+}
+
+function handleExport() {
+  if (!game.value?.board) return;
+  
+  // Collect all cell texts
+  const texts: string[] = [];
+  for (const row of game.value.board.cells) {
+    for (const cell of row) {
+      texts.push(cell.text || '');
+    }
+  }
+  
+  // Generate CSV content
+  const csvLines: string[] = [];
+  for (let i = 0; i < 5; i++) {
+    const rowTexts = texts.slice(i * 5, (i + 1) * 5);
+    const csvRow = rowTexts.map(text => {
+      if (text.includes(',') || text.includes('"') || text.includes('\n')) {
+        return '"' + text.replace(/"/g, '""') + '"';
+      }
+      return text;
+    }).join(',');
+    csvLines.push(csvRow);
+  }
+  
+  const csvContent = csvLines.join('\n');
+  
+  // Download file
+  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = 'bingo-board.csv';
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
 function handleMark(row: number, col: number, color: PlayerColor) {
   if (color === 'none') {
     // Unmark cell
@@ -79,6 +250,17 @@ function handleMark(row: number, col: number, color: PlayerColor) {
   } else {
     // Mark cell
     markCell(row, col, color);
+  }
+}
+
+function handleSettle(color: PlayerColor) {
+  settle(color);
+}
+
+function handlePlayerSettle() {
+  const color = store.currentUser?.player_color;
+  if (color && color !== 'none') {
+    settle(color);
   }
 }
 
@@ -167,7 +349,7 @@ onMounted(() => {
       </div>
     </header>
 
-    <!-- Error display -->
+    <!-- Error display at bottom -->
     <div v-if="store.error" class="error-bar">
       {{ store.error }}
       <button @click="store.clearError()">{{ t('common.close') }}</button>
@@ -188,11 +370,35 @@ onMounted(() => {
         <div class="room-header">
           <h2>{{ currentRoom?.name }}</h2>
           <div class="room-actions">
-            <RoomSettings 
-              :game="game"
-              @reset="resetGame"
-            />
-            <button @click="handleLeaveRoom">{{ t('room.leaveRoom') }}</button>
+            <!-- Import/Export buttons (owner only, waiting status) -->
+            <template v-if="store.isOwner && game?.status === 'waiting'">
+              <input 
+                ref="fileInputRef"
+                type="file" 
+                accept=".txt,.csv" 
+                @change="handleFileImport"
+                style="display: none"
+              />
+              <button @click="handleImportClick" class="action-btn import-btn">
+                📥 {{ t('game.importText') }}
+              </button>
+              <button @click="handleExport" class="action-btn export-btn">
+                📤 {{ t('game.exportText') }}
+              </button>
+            </template>
+            
+            <!-- Start/Reset button (owner only) -->
+            <button 
+              v-if="store.isOwner"
+              @click="game?.status === 'waiting' ? startGame() : resetGame()" 
+              class="action-btn"
+              :class="game?.status === 'waiting' ? 'start-btn' : 'reset-btn'"
+            >
+              <template v-if="game?.status === 'waiting'">🎮 {{ t('game.startGame') }}</template>
+              <template v-else>🔄 {{ game?.status === 'finished' ? t('game.restart') : t('game.resetBoard') }}</template>
+            </button>
+            
+            <button @click="handleLeaveRoom" class="leave-btn">{{ t('room.leaveRoom') }}</button>
           </div>
         </div>
         
@@ -200,14 +406,81 @@ onMounted(() => {
           <div class="left-panel">
             <BingoBoard 
               v-if="game?.board" 
+              ref="bingoBoardRef"
               :board="game.board" 
               :game="game"
               @mark="handleMark"
+              @settle="handleSettle"
             />
           </div>
           
           <div class="right-panel">
             <PlayerPanel :game="game" />
+            
+            <!-- Control buttons section -->
+            <div class="control-section">
+              <!-- Room settings -->
+              <RoomSettings :game="game" />
+              
+              <!-- Referee color picker -->
+              <div v-if="store.isReferee && (game?.status === 'playing' || game?.status === 'finished')" class="color-picker">
+                <span>{{ t('game.selectColor') }}:</span>
+                <div class="color-buttons">
+                  <button 
+                    class="color-btn red" 
+                    :class="{ active: selectedColor === 'red' }"
+                    @click="selectedColor = 'red'"
+                  >{{ t('game.red') }}</button>
+                  <button 
+                    class="color-btn blue" 
+                    :class="{ active: selectedColor === 'blue' }"
+                    @click="selectedColor = 'blue'"
+                  >{{ t('game.blue') }}</button>
+                  <button 
+                    class="color-btn clear" 
+                    :class="{ active: selectedColor === 'none' }"
+                    @click="selectedColor = 'none'"
+                  >{{ t('game.clear') }}</button>
+                </div>
+              </div>
+              
+              <!-- Settlement buttons for phase rule -->
+              <template v-if="game?.rule === 'phase' && game?.status === 'playing'">
+                <!-- For players -->
+                <template v-if="store.isPlayer">
+                  <button 
+                    v-if="!isCurrentPlayerSettled"
+                    @click="handlePlayerSettle" 
+                    class="control-btn settle-btn"
+                    :disabled="!canSettleNow"
+                  >
+                    ⚖️ {{ t('phase.settle') }}
+                  </button>
+                  <div v-else class="settled-status">
+                    ✓ {{ t('phase.settled') }}
+                  </div>
+                </template>
+                <!-- For referee -->
+                <template v-else-if="store.isReferee">
+                  <div class="settle-buttons">
+                    <button 
+                      @click="handleSettle('red')" 
+                      class="control-btn settle-btn red"
+                      :disabled="game?.red_settled || !canRedSettle"
+                    >
+                      ⚖️ {{ t('game.redTeam') }}
+                    </button>
+                    <button 
+                      @click="handleSettle('blue')" 
+                      class="control-btn settle-btn blue"
+                      :disabled="game?.blue_settled || !canBlueSettle"
+                    >
+                      ⚖️ {{ t('game.blueTeam') }}
+                    </button>
+                  </div>
+                </template>
+              </template>
+            </div>
           </div>
         </div>
       </template>
@@ -399,12 +672,27 @@ body {
 }
 
 .error-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 20px;
+  padding: 12px 20px;
   background: var(--error-bg);
   color: var(--text-on-accent);
+  z-index: 1000;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.error-bar button {
+  background: rgba(255, 255, 255, 0.2);
+  padding: 6px 12px;
+}
+
+.error-bar button:hover {
+  background: rgba(255, 255, 255, 0.3);
 }
 
 .main {
@@ -443,6 +731,52 @@ body {
   padding: 8px 16px;
 }
 
+.action-btn {
+  font-weight: 500;
+}
+
+.import-btn {
+  background: var(--info-color);
+}
+
+.import-btn:hover {
+  background: var(--info-hover);
+}
+
+.export-btn {
+  background: var(--success-color);
+}
+
+.export-btn:hover {
+  background: var(--success-hover);
+}
+
+.start-btn {
+  background: var(--success-color);
+  font-weight: bold;
+}
+
+.start-btn:hover {
+  background: var(--success-hover);
+}
+
+.reset-btn {
+  background: var(--warning-color);
+  font-weight: bold;
+}
+
+.reset-btn:hover {
+  background: #e67e22;
+}
+
+.leave-btn {
+  background: var(--accent-color);
+}
+
+.leave-btn:hover {
+  background: var(--accent-hover);
+}
+
 .game-container {
   display: flex;
   gap: 20px;
@@ -451,14 +785,143 @@ body {
 .left-panel {
   flex: 1;
   display: flex;
+  align-items: center;
   justify-content: center;
+  min-width: 0;
 }
 
 .right-panel {
   width: 300px;
   display: flex;
   flex-direction: column;
-  gap: 20px;
+  gap: 15px;
+}
+
+.control-section {
+  padding: 15px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.control-btn {
+  padding: 10px 16px;
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.start-btn {
+  background: var(--success-color);
+}
+
+.start-btn:hover:not(:disabled) {
+  background: var(--success-hover);
+}
+
+.color-picker {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px;
+  background: var(--bg-primary);
+  border-radius: 6px;
+}
+
+.color-picker span {
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-weight: bold;
+}
+
+.color-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.color-btn {
+  flex: 1;
+  padding: 8px 12px;
+  border: 2px solid transparent;
+  border-radius: 4px;
+  cursor: pointer;
+  font-weight: bold;
+  transition: all 0.2s;
+  font-size: 13px;
+}
+
+.color-btn.red {
+  background: var(--red-color);
+  color: white;
+}
+
+.color-btn.blue {
+  background: var(--blue-color);
+  color: white;
+}
+
+.color-btn.clear {
+  background: var(--clear-btn-bg);
+  color: white;
+}
+
+.color-btn.active {
+  border-color: var(--warning-color);
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(243, 156, 18, 0.5);
+}
+
+/* Reset button */
+.reset-btn {
+  background: var(--warning-color);
+}
+
+.reset-btn:hover:not(:disabled) {
+  background: #e67e22;
+}
+
+/* Settlement buttons */
+.settle-btn {
+  background: var(--info-color);
+}
+
+.settle-btn:hover:not(:disabled) {
+  background: var(--info-hover);
+}
+
+.settle-btn.red {
+  background: var(--red-color);
+}
+
+.settle-btn.red:hover:not(:disabled) {
+  background: #c0392b;
+}
+
+.settle-btn.blue {
+  background: var(--blue-color);
+}
+
+.settle-btn.blue:hover:not(:disabled) {
+  background: #2980b9;
+}
+
+.settle-buttons {
+  display: flex;
+  gap: 8px;
+}
+
+.settle-buttons .settle-btn {
+  flex: 1;
+}
+
+.settled-status {
+  text-align: center;
+  padding: 10px;
+  background: var(--success-color);
+  border-radius: 4px;
+  color: white;
+  font-weight: bold;
 }
 
 button {

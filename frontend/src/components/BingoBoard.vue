@@ -1,59 +1,24 @@
 <template>
   <div class="bingo-board">
-    <!-- Owner action buttons (waiting status) -->
-    <div v-if="isOwner && game?.status === 'waiting'" class="owner-actions">
-      <input 
-        type="file" 
-        ref="fileInput"
-        accept=".txt,.csv"
-        @change="handleFileImport"
-        style="display: none"
-      />
-      <button @click="($refs.fileInput as HTMLInputElement).click()" class="action-btn import-btn">
-        📁 {{ t('game.importText') }}
-      </button>
-      <button @click="handleExport" class="action-btn export-btn">
-        📤 {{ t('game.exportText') }}
-      </button>
-      <button @click="startGame" class="action-btn start-btn">
-        🎮 {{ t('game.startGame') }}
-      </button>
+    <!-- Bingo notification (floating) -->
+    <div v-if="game?.rule === 'phase' && game?.status === 'playing' && game.bingo_achiever && game.bingo_achiever !== 'none'" class="bingo-notification">
+      🎉 {{ game.bingo_achiever === 'red' ? t('game.redTeam') : t('game.blueTeam') }} {{ t('phase.bingoAchieved') }}! 🎉
     </div>
 
-    <!-- Referee color picker (available during and after game) -->
-    <div v-if="isReferee && (game?.status === 'playing' || game?.status === 'finished')" class="color-picker">
-      <span>{{ t('game.selectColor') }}:</span>
-      <button 
-        class="color-btn red" 
-        :class="{ active: selectedColor === 'red' }"
-        @click="selectedColor = 'red'"
-      >{{ t('game.red') }}</button>
-      <button 
-        class="color-btn blue" 
-        :class="{ active: selectedColor === 'blue' }"
-        @click="selectedColor = 'blue'"
-      >{{ t('game.blue') }}</button>
-      <button 
-        class="color-btn clear" 
-        :class="{ active: selectedColor === 'none' }"
-        @click="selectedColor = 'none'"
-      >{{ t('game.clear') }}</button>
-    </div>
-    
-    <div class="board">
+    <div class="board" ref="boardRef">
       <div v-for="(row, rowIndex) in board.cells" :key="rowIndex" class="row">
         <div
           v-for="(cell, colIndex) in row"
           :key="colIndex"
           class="cell"
-          :class="[cell.marked_by, { clickable: canMark || canEditText, locked: isLocked(rowIndex), 'can-edit': canEditText }]"
+          :class="getCellClass(cell, rowIndex)"
           @click="handleClick(rowIndex, colIndex)"
+          @contextmenu="handleRightClick($event, rowIndex, colIndex)"
         >
           <span 
             class="cell-text" 
             :style="{ fontSize: getCellFontSize(cell.text) }"
           >{{ cell.text }}</span>
-          <span v-if="cell.times > 0" class="times">{{ cell.times }}</span>
         </div>
       </div>
     </div>
@@ -76,7 +41,23 @@
       </div>
     </div>
 
-    <!-- Winner display (below board) -->
+    <!-- Game info section below board (always visible) -->
+    <div v-if="game" class="game-info-section">
+      <!-- Scores (top priority) -->
+      <div class="scores-row">
+        <span class="red">{{ t('game.redScore') }}: {{ redCount }}</span>
+        <span class="blue">{{ t('game.blueScore') }}: {{ blueCount }}</span>
+      </div>
+      
+      <!-- Game status -->
+      <div class="status-row">
+        <span v-if="game.status === 'waiting'">{{ t('game.waiting') }}</span>
+        <span v-else-if="game.status === 'playing'">{{ t('game.playing') }}</span>
+        <span v-else class="finished">{{ t('game.finished') }}</span>
+      </div>
+    </div>
+
+    <!-- Winner display -->
     <div v-if="game?.status === 'finished' && game.winner" class="winner-display">
       <div class="winner-title">
         <span v-if="game.winner.winner === 'none'" class="tie">{{ t('game.draw') }}!</span>
@@ -92,35 +73,27 @@
         <span class="blue">{{ t('game.blueScore') }}: {{ game.winner.blue_score }}</span>
       </div>
     </div>
-
-    <div v-if="game" class="game-info">
-      <div class="status">
-        <span v-if="game.status === 'waiting'">{{ t('game.waiting') }}</span>
-        <span v-else-if="game.status === 'playing'">{{ t('game.playing') }}</span>
-        <span v-else class="finished">{{ t('game.finished') }}</span>
-      </div>
-      <div class="counts">
-        <span class="red">{{ t('game.redScore') }}: {{ redCount }}</span>
-        <span class="blue">{{ t('game.blueScore') }}: {{ blueCount }}</span>
-      </div>
-    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, inject, type Ref, onMounted, onUnmounted } from 'vue';
 import type { Game, Board, PlayerColor, WinReason } from '../types';
 import { useGameStore } from '../stores/game';
 import { useWebSocket } from '../composables/useWebSocket';
 import { useLocaleStore } from '../stores/locale';
 
 // Cell size constants
-const CELL_SIZE = 80;
+const BASE_CELL_SIZE = 80; // Base cell size in pixels
 const CELL_PADDING = 6; // Consistent with CSS padding
 const LINE_HEIGHT = 1.3;
 const MIN_FONT_SIZE = 7;
 const MAX_FONT_SIZE = 18;
 const SAFETY_FACTOR = 0.92; // Safety factor to prevent overflow due to estimation errors
+
+// Responsive cell size
+const cellSize = ref(BASE_CELL_SIZE);
+const boardRef = ref<HTMLElement | null>(null);
 
 const props = defineProps<{
   board: Board;
@@ -129,11 +102,70 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'mark', row: number, col: number, color: PlayerColor): void;
+  (e: 'settle', color: PlayerColor): void;
 }>();
 
 const store = useGameStore();
-const { setCellText, setAllCellTexts, startGame } = useWebSocket();
+const { setCellText, setAllCellTexts, startGame, settle, clearCellMark } = useWebSocket();
 const { t } = useLocaleStore();
+
+// Inject selectedColor from parent (App.vue)
+const selectedColor = inject<Ref<PlayerColor>>('selectedColor');
+if (!selectedColor) {
+  console.error('selectedColor not provided from parent');
+}
+
+// Update cell size based on actual rendered cell
+function updateCellSize() {
+  if (!boardRef.value) return;
+  
+  // Get the first cell's actual rendered size
+  const firstCell = boardRef.value.querySelector('.cell');
+  if (!firstCell) return;
+  
+  const rect = firstCell.getBoundingClientRect();
+  const size = rect.width;
+  
+  // Skip if size is too small or not ready
+  if (size < 30) return;
+  
+  cellSize.value = Math.round(size);
+}
+
+// Resize observer
+let resizeObserver: ResizeObserver | null = null;
+
+onMounted(() => {
+  // Initial calculation
+  const initUpdate = () => {
+    nextTick(() => {
+      updateCellSize();
+    });
+  };
+  
+  // Try immediately and after delays
+  initUpdate();
+  setTimeout(initUpdate, 100);
+  setTimeout(initUpdate, 300);
+  
+  // Use ResizeObserver to update cell size when board resizes
+  if (boardRef.value) {
+    resizeObserver = new ResizeObserver(() => {
+      updateCellSize();
+    });
+    resizeObserver.observe(boardRef.value);
+  }
+  
+  // Fallback to window resize
+  window.addEventListener('resize', updateCellSize);
+});
+
+onUnmounted(() => {
+  if (resizeObserver) {
+    resizeObserver.disconnect();
+  }
+  window.removeEventListener('resize', updateCellSize);
+});
 
 // Calculate estimated width of a string (in font size units)
 // Use conservative estimation to ensure width is not underestimated
@@ -197,8 +229,8 @@ function getCellFontSize(text: string): string {
   if (!text) return `${MAX_FONT_SIZE}px`;
   
   // Calculate available width and height (considering padding)
-  const availableWidth = (CELL_SIZE - CELL_PADDING * 2) * SAFETY_FACTOR;
-  const availableHeight = (CELL_SIZE - CELL_PADDING * 2) * SAFETY_FACTOR;
+  const availableWidth = (cellSize.value - CELL_PADDING * 2) * SAFETY_FACTOR;
+  const availableHeight = (cellSize.value - CELL_PADDING * 2) * SAFETY_FACTOR;
   
   // Binary search to find the maximum feasible font size
   let low = MIN_FONT_SIZE;
@@ -227,9 +259,6 @@ function getCellFontSize(text: string): string {
   
   return `${Math.round(bestSize)}px`;
 }
-
-// Referee selected color
-const selectedColor = ref<PlayerColor>('red');
 
 // Text editing related
 const showEditDialog = ref(false);
@@ -276,6 +305,11 @@ const canMark = computed(() => {
 });
 
 const redCount = computed(() => {
+  // For phase rule, calculate actual score
+  if (props.game?.rule === 'phase' && props.game.phase_config) {
+    return calculatePhaseScore('red');
+  }
+  // For other rules, count marked cells
   let count = 0;
   for (const row of props.board.cells) {
     for (const cell of row) {
@@ -286,6 +320,11 @@ const redCount = computed(() => {
 });
 
 const blueCount = computed(() => {
+  // For phase rule, calculate actual score
+  if (props.game?.rule === 'phase' && props.game.phase_config) {
+    return calculatePhaseScore('blue');
+  }
+  // For other rules, count marked cells
   let count = 0;
   for (const row of props.board.cells) {
     for (const cell of row) {
@@ -294,6 +333,41 @@ const blueCount = computed(() => {
   }
   return count;
 });
+
+// Calculate phase rule score for a player
+function calculatePhaseScore(color: 'red' | 'blue'): number {
+  if (!props.game?.phase_config) return 0;
+  
+  const config = props.game.phase_config;
+  let score = 0;
+  
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 5; col++) {
+      const cell = props.board.cells[row][col];
+      
+      // First marker gets full row score
+      if (cell.marked_by === color) {
+        score += config.row_scores[row];
+      }
+      // Second marker gets reduced score
+      if (cell.second_mark === color) {
+        score += config.second_half_scores[row];
+      }
+    }
+  }
+  
+  // Add bingo bonus
+  if (props.game.bingo_achiever === color) {
+    score += config.bingo_bonus;
+  }
+  
+  // Add first settler bonus
+  if (props.game.first_settler === color) {
+    score += config.final_bonus;
+  }
+  
+  return score;
+}
 
 const winReasonText = computed(() => {
   if (!props.game?.winner) return '';
@@ -305,14 +379,121 @@ const winReasonText = computed(() => {
       return t('winReason.fullBoard');
     case 'blackout':
       return t('winReason.blackout');
+    case 'phase':
+      return t('winReason.phase');
     default:
       return '';
   }
 });
 
+// Phase rule: check if current player can settle
+const canSettle = computed(() => {
+  if (!props.game || props.game.rule !== 'phase') return false;
+  if (props.game.status !== 'playing') return false;
+  return store.isPlayer || store.isReferee;
+});
+
+// Check if current player has already settled
+const isCurrentPlayerSettled = computed(() => {
+  if (!props.game) return false;
+  const color = store.currentUser?.player_color;
+  if (color === 'red') return props.game.red_settled ?? false;
+  if (color === 'blue') return props.game.blue_settled ?? false;
+  return false;
+});
+
+// Check if player meets settlement conditions (>= 2 cells in row 5)
+const canSettleNow = computed(() => {
+  if (!props.game) return false;
+  const color = store.currentUser?.player_color;
+  if (color === 'red') {
+    return (props.game.red_row_marks?.[4] ?? 0) >= 2;
+  }
+  if (color === 'blue') {
+    return (props.game.blue_row_marks?.[4] ?? 0) >= 2;
+  }
+  return false;
+});
+
+// For referee: check if each player can settle
+const canRedSettle = computed(() => {
+  if (!props.game) return false;
+  return (props.game.red_row_marks?.[4] ?? 0) >= 2;
+});
+
+const canBlueSettle = computed(() => {
+  if (!props.game) return false;
+  return (props.game.blue_row_marks?.[4] ?? 0) >= 2;
+});
+
+function handleSettle() {
+  const color = store.currentUser?.player_color;
+  if (color && color !== 'none') {
+    emit('settle', color);
+  }
+}
+
+function handleRefereeSettle(color: 'red' | 'blue') {
+  emit('settle', color);
+}
+
+// Expose settle-related properties and methods to parent component
+defineExpose({
+  canSettle,
+  isCurrentPlayerSettled,
+  canSettleNow,
+  canRedSettle,
+  canBlueSettle,
+  handleSettle,
+  handleRefereeSettle
+});
+
 function isLocked(row: number): boolean {
   if (!props.game || props.game.rule !== 'phase') return false;
-  return row > (props.game.current_row ?? 0);
+  
+  // Get player's unlocked row
+  const playerColor = store.currentUser?.player_color;
+  let unlockedRow = 0;
+  
+  if (store.isReferee) {
+    // Referee can mark any unlocked row (use max of both players)
+    unlockedRow = Math.max(
+      props.game.red_unlocked_row ?? 0,
+      props.game.blue_unlocked_row ?? 0
+    );
+  } else if (playerColor === 'red') {
+    unlockedRow = props.game.red_unlocked_row ?? 0;
+  } else if (playerColor === 'blue') {
+    unlockedRow = props.game.blue_unlocked_row ?? 0;
+  } else {
+    // Spectator: use max of both players for display purposes
+    unlockedRow = Math.max(
+      props.game.red_unlocked_row ?? 0,
+      props.game.blue_unlocked_row ?? 0
+    );
+  }
+  
+  return row > unlockedRow;
+}
+
+function getCellClass(cell: { marked_by: string; second_mark?: string }, row: number): Record<string, boolean> {
+  const classes: Record<string, boolean> = {
+    clickable: canMark.value || canEditText.value,
+    locked: isLocked(row),
+    'can-edit': canEditText.value,
+  };
+  
+  // For blackout and phase rules with second mark, use diagonal pattern
+  if ((props.game?.rule === 'phase' || props.game?.rule === 'blackout') && 
+      cell.second_mark && cell.second_mark !== 'none') {
+    classes['both-marks'] = true;
+    classes[cell.marked_by] = true;
+    classes[`second-${cell.second_mark}`] = true;
+  } else {
+    classes[cell.marked_by] = true;
+  }
+  
+  return classes;
 }
 
 function handleClick(row: number, col: number) {
@@ -333,7 +514,7 @@ function handleClick(row: number, col: number) {
   // Referee mode
   if (store.isReferee) {
     // Use referee selected color
-    emit('mark', row, col, selectedColor.value);
+    emit('mark', row, col, selectedColor?.value || 'none');
     return;
   }
   
@@ -348,7 +529,48 @@ function handleClick(row: number, col: number) {
       }
       return;
     }
+    
+    // Blackout and phase rules: can mark if not already marked by this player
+    if (props.game?.rule === 'blackout' || props.game?.rule === 'phase') {
+      // If cell already has this player's mark, do nothing
+      if (cell.marked_by === playerColor || cell.second_mark === playerColor) {
+        return;
+      }
+    }
+    
     emit('mark', row, col, playerColor);
+  }
+}
+
+// Right-click handler to clear specific color
+function handleRightClick(event: MouseEvent, row: number, col: number) {
+  event.preventDefault();
+  
+  if (!canMark.value) return;
+  
+  const cell = props.board.cells[row][col];
+  
+  // Only for blackout and phase rules
+  if (props.game?.rule !== 'blackout' && props.game?.rule !== 'phase') {
+    return;
+  }
+  
+  // Referee can clear any color
+  if (store.isReferee) {
+    // Clear the selected color
+    if (selectedColor?.value && selectedColor.value !== 'none') {
+      clearCellMark(row, col, selectedColor.value);
+    }
+    return;
+  }
+  
+  // Player can only clear their own color
+  const playerColor = store.currentUser?.player_color;
+  if (playerColor && playerColor !== 'none') {
+    // Check if this player has a mark on the cell
+    if (cell.marked_by === playerColor || cell.second_mark === playerColor) {
+      clearCellMark(row, col, playerColor);
+    }
   }
 }
 
@@ -472,53 +694,33 @@ function handleExport() {
   flex-direction: column;
   align-items: center;
   gap: 20px;
+  position: relative;
 }
 
-/* Owner action buttons */
-.owner-actions {
-  display: flex;
-  gap: 15px;
-  padding: 15px;
-  background: var(--bg-tertiary);
-  border-radius: 8px;
-}
-
-.action-btn {
+.bingo-notification {
+  position: absolute;
+  top: -60px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: linear-gradient(135deg, #f39c12, #e67e22);
+  color: white;
   padding: 12px 24px;
-  border: none;
-  border-radius: 6px;
-  font-size: 14px;
+  border-radius: 25px;
+  font-size: 18px;
   font-weight: bold;
-  cursor: pointer;
-  transition: all 0.2s;
+  box-shadow: 0 4px 20px rgba(243, 156, 18, 0.5);
+  animation: pulse 2s infinite;
+  z-index: 100;
+  white-space: nowrap;
 }
 
-.import-btn {
-  background: var(--info-color);
-  color: var(--text-on-accent);
-}
-
-.import-btn:hover {
-  background: var(--info-hover);
-}
-
-.start-btn {
-  background: var(--success-color);
-  color: var(--text-on-accent);
-}
-
-.start-btn:hover {
-  background: var(--success-hover);
-  transform: scale(1.05);
-}
-
-.export-btn {
-  background: #9b59b6;
-  color: var(--text-on-accent);
-}
-
-.export-btn:hover {
-  background: #8e44ad;
+@keyframes pulse {
+  0%, 100% {
+    transform: translateX(-50%) scale(1);
+  }
+  50% {
+    transform: translateX(-50%) scale(1.05);
+  }
 }
 
 .winner-display {
@@ -628,77 +830,55 @@ function handleExport() {
   background: var(--success-hover);
 }
 
-.color-picker {
+.bingo-board {
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 10px;
-  padding: 10px;
-  background: var(--bg-tertiary);
-  border-radius: 8px;
-}
-
-.color-picker span {
-  color: var(--text-primary);
-  font-size: 14px;
-}
-
-.color-btn {
-  padding: 8px 16px;
-  border: 2px solid transparent;
-  border-radius: 4px;
-  cursor: pointer;
-  font-weight: bold;
-  transition: all 0.2s;
-}
-
-.color-btn.red {
-  background: var(--red-color);
-  color: var(--text-on-accent);
-}
-
-.color-btn.blue {
-  background: var(--blue-color);
-  color: var(--text-on-accent);
-}
-
-.color-btn.clear {
-  background: var(--clear-btn-bg);
-  color: var(--text-on-accent);
-}
-
-.color-btn.active {
-  border-color: var(--text-primary);
-  transform: scale(1.1);
+  gap: 15px;
+  width: 100%;
+  height: 100%;
+  min-height: 0; /* Allow flexbox to shrink */
 }
 
 .board {
-  display: flex;
-  flex-direction: column;
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  grid-template-rows: repeat(5, 1fr);
   gap: 4px;
   background: var(--bg-quaternary);
   padding: 8px;
   border-radius: 8px;
+  /* Reserve space for game-info-section below (approximately 80px) */
+  width: min(100%, calc(100vh - 200px));
+  max-width: 600px;
+  aspect-ratio: 1;
+  flex-shrink: 1; /* Allow board to shrink if needed */
 }
 
 .row {
-  display: flex;
-  gap: 4px;
+  display: contents;
 }
 
 .cell {
-  width: 80px;
-  height: 80px;
-  min-height: 80px;
-  max-height: 80px;
   background: var(--cell-bg);
   border-radius: 4px;
   display: flex;
   align-items: center;
   justify-content: center;
   position: relative;
-  transition: all 0.2s;
   padding: 6px;
   box-sizing: border-box;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.cell.clickable {
+  cursor: pointer;
+}
+
+.cell.clickable:hover {
+  transform: scale(1.05);
+  box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
+  z-index: 1;
 }
 
 .cell-text {
@@ -752,38 +932,76 @@ function handleExport() {
   background: var(--cell-empty-bg);
 }
 
-.times {
+/* Cell with both marks - show second mark as bottom quarter solid fill */
+.cell.both-marks {
+  position: relative;
+}
+
+/* Bottom quarter solid fill for second mark */
+.cell.both-marks.second-red::after {
+  content: '';
   position: absolute;
-  bottom: 2px;
-  right: 4px;
-  font-size: 10px;
-  color: var(--cell-times-color);
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 25%;
+  background: rgba(231, 76, 60, 0.9);
+  border-radius: 0 0 4px 4px;
+  pointer-events: none;
 }
 
-.cell.red .times,
-.cell.blue .times {
-  color: var(--text-on-accent);
+.cell.both-marks.second-blue::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 25%;
+  background: rgba(52, 152, 219, 0.9);
+  border-radius: 0 0 4px 4px;
+  pointer-events: none;
 }
 
-.game-info {
+/* Ensure text is still visible on both-marks cells */
+.cell.both-marks .cell-text {
+  position: relative;
+  z-index: 1;
+}
+
+/* Game info section below board */
+.game-info-section {
   text-align: center;
+  margin-top: 15px;
+  padding: 10px;
+  background: var(--bg-tertiary);
+  border-radius: 8px;
 }
 
-.status {
-  font-size: 18px;
-  margin-bottom: 8px;
-  color: var(--text-primary);
-}
-
-.status .finished {
-  color: var(--warning-color);
-}
-
-.counts {
+.scores-row {
   display: flex;
-  gap: 20px;
-  font-size: 16px;
-  color: var(--text-primary);
+  justify-content: center;
+  gap: 30px;
+  font-size: 18px;
+  font-weight: bold;
+  margin-bottom: 8px;
+}
+
+.scores-row .red {
+  color: var(--red-color);
+}
+
+.scores-row .blue {
+  color: var(--blue-color);
+}
+
+.status-row {
+  font-size: 14px;
+  color: var(--text-secondary);
+}
+
+.status-row .finished {
+  color: var(--warning-color);
+  font-weight: bold;
 }
 
 .red {

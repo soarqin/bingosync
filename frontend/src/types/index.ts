@@ -4,10 +4,11 @@ export type GameRule = 'normal' | 'blackout' | 'phase';
 export type GameStatus = 'waiting' | 'playing' | 'finished';
 export type PlayerColor = 'none' | 'red' | 'blue';
 export type UserRole = 'spectator' | 'player' | 'referee';
-export type WinReason = 'bingo' | 'full_board' | 'blackout';
+export type WinReason = 'bingo' | 'full_board' | 'blackout' | 'phase';
 
 export interface Cell {
   marked_by: PlayerColor;
+  second_mark?: PlayerColor;
   times: number;
   text: string;
 }
@@ -18,11 +19,11 @@ export interface Board {
 
 export interface PhaseConfig {
   row_scores: number[];
-  second_half_rate: number;
-  final_bonus: number;
-  final_bonus_type: string;
+  second_half_scores: number[];
   cells_per_row: number;
   unlock_threshold: number;
+  bingo_bonus: number;
+  final_bonus: number;
 }
 
 export interface Winner {
@@ -40,7 +41,13 @@ export interface Game {
   winner?: Winner;
   red_row_marks?: number[];
   blue_row_marks?: number[];
-  current_row?: number;
+  red_unlocked_row?: number;
+  blue_unlocked_row?: number;
+  bingo_achiever?: PlayerColor;
+  bingo_line?: number;
+  red_settled?: boolean;
+  blue_settled?: boolean;
+  first_settler?: PlayerColor;
 }
 
 export interface User {
@@ -83,10 +90,12 @@ export type MessageType =
   | 'set_password'
   | 'mark_cell'
   | 'unmark_cell'
+  | 'clear_cell_mark'
   | 'set_rule'
   | 'start_game'
   | 'reset_game'
   | 'set_cell_text'
+  | 'settle'
   | 'state_update'
   | 'room_list'
   | 'error'

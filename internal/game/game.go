@@ -10,16 +10,20 @@ var (
 	ErrCellAlreadyMarked = errors.New("cell already marked")
 	ErrRowLocked         = errors.New("row is locked")
 	ErrRowLimitExceeded  = errors.New("row mark limit exceeded")
+	ErrAlreadySettled    = errors.New("player already settled")
+	ErrCannotSettleYet   = errors.New("need at least 2 cells in row 5 to settle")
 )
 
 // NewGame creates a new game with specified rule
 func NewGame(rule GameRule) *Game {
 	g := &Game{
-		Board:       NewBoard(),
-		Rule:        rule,
-		PhaseConfig: DefaultPhaseConfig(),
-		Status:      StatusWaiting,
-		CurrentRow:  0,
+		Board:           NewBoard(),
+		Rule:            rule,
+		PhaseConfig:     DefaultPhaseConfig(),
+		Status:          StatusWaiting,
+		BingoLine:       -1,
+		RedUnlockedRow:  0,
+		BlueUnlockedRow: 0,
 	}
 	return g
 }
@@ -34,7 +38,6 @@ func (g *Game) Start() error {
 }
 
 // MarkCell marks a cell for a player
-// Bingo only records marking status, no turn concept
 func (g *Game) MarkCell(row, col int, player PlayerColor) error {
 	if g.Status == StatusWaiting {
 		return ErrGameNotStarted
@@ -59,12 +62,12 @@ func (g *Game) MarkCell(row, col int, player PlayerColor) error {
 			return err
 		}
 	case RulePhase:
-		if err := g.markPhase(cell, row, player); err != nil {
+		if err := g.markPhase(row, col, player); err != nil {
 			return err
 		}
 	}
 
-	// Check for winner (phase rule doesn't check here)
+	// Check for winner (phase rule checks after mark)
 	if g.Rule != RulePhase {
 		g.CheckWin()
 	}
@@ -73,7 +76,6 @@ func (g *Game) MarkCell(row, col int, player PlayerColor) error {
 }
 
 // MarkCellForce marks a cell with force overwrite (for referee)
-// Referee can operate after game ends, will check if state needs reset
 func (g *Game) MarkCellForce(row, col int, player PlayerColor) error {
 	if g.Status == StatusWaiting {
 		return ErrGameNotStarted
@@ -85,11 +87,10 @@ func (g *Game) MarkCellForce(row, col int, player PlayerColor) error {
 
 	cell := &g.Board.Cells[row][col]
 
-	// Referee force mark: set color directly, reset times
 	cell.MarkedBy = player
+	cell.SecondMark = ColorNone
 	cell.Times = 0
 
-	// Re-check winner status (phase rule doesn't check here)
 	if g.Rule != RulePhase {
 		g.CheckWin()
 	}
@@ -98,7 +99,6 @@ func (g *Game) MarkCellForce(row, col int, player PlayerColor) error {
 }
 
 // markNormal handles marking for normal rule
-// Normal rule: each cell can only be marked once, first come first served
 func (g *Game) markNormal(cell *Cell, player PlayerColor) error {
 	if cell.MarkedBy != ColorNone {
 		return ErrCellAlreadyMarked
@@ -109,82 +109,179 @@ func (g *Game) markNormal(cell *Cell, player PlayerColor) error {
 }
 
 // markBlackout handles marking for blackout rule
-// Blackout rule: allows repeated marking, records mark count
+// Both players can mark the same cell, first marker in MarkedBy, second in SecondMark
 func (g *Game) markBlackout(cell *Cell, player PlayerColor) error {
-	cell.Times++
-	cell.MarkedBy = player
-	return nil
+	// Check if player already marked this cell
+	if cell.MarkedBy == player {
+		return errors.New("player already marked this cell")
+	}
+	if cell.SecondMark == player {
+		return errors.New("player already marked this cell")
+	}
+
+	// First marker
+	if cell.MarkedBy == ColorNone {
+		cell.MarkedBy = player
+		cell.Times = 1
+		return nil
+	}
+
+	// Second marker (different color from first)
+	if cell.SecondMark == ColorNone {
+		cell.SecondMark = player
+		cell.Times = 2
+		return nil
+	}
+
+	// Cell already has both colors marked
+	return ErrCellAlreadyMarked
 }
 
 // markPhase handles marking for phase rule
-// Phase rule: unlock by row, each row has mark limit
-func (g *Game) markPhase(cell *Cell, row int, player PlayerColor) error {
-	// Check if row is unlocked
-	if row > g.CurrentRow {
-		return ErrRowLocked
-	}
+func (g *Game) markPhase(row, col int, player PlayerColor) error {
+	cell := &g.Board.Cells[row][col]
 
-	// Check row limits
+	var unlockedRow *int
 	var rowMarks *int
 	if player == ColorRed {
+		unlockedRow = &g.RedUnlockedRow
 		rowMarks = &g.RedRowMarks[row]
 	} else {
+		unlockedRow = &g.BlueUnlockedRow
 		rowMarks = &g.BlueRowMarks[row]
 	}
 
+	// Check if row is locked
+	if row > *unlockedRow {
+		return ErrRowLocked
+	}
+
+	// Check per-row limit
 	if *rowMarks >= g.PhaseConfig.CellsPerRow {
 		return ErrRowLimitExceeded
+	}
+
+	// Check if player already marked this cell
+	if cell.MarkedBy == player || cell.SecondMark == player {
+		return errors.New("player already marked this cell")
 	}
 
 	// Mark the cell
 	if cell.MarkedBy == ColorNone {
 		cell.MarkedBy = player
-	} else if cell.MarkedBy != player {
-		// Cell already marked by opponent, record double mark
-		cell.Times++
+	} else if cell.SecondMark == ColorNone {
+		cell.SecondMark = player
+		cell.Times = 1
 	}
 
+	// Update row marks count
 	*rowMarks++
 
-	// Check if should unlock next row
-	if g.CurrentRow < 4 {
-		totalMarks := g.RedRowMarks[g.CurrentRow] + g.BlueRowMarks[g.CurrentRow]
-		if totalMarks >= g.PhaseConfig.UnlockThreshold {
-			g.CurrentRow++
+	// Check for row unlock: only when marking the current highest unlocked row
+	// and reaching the threshold, unlock the next row
+	if row == *unlockedRow && *unlockedRow < 4 {
+		if *rowMarks >= g.PhaseConfig.UnlockThreshold {
+			*unlockedRow++
 		}
+	}
+
+	// Check for Bingo
+	if g.BingoAchiever == ColorNone {
+		g.checkPhaseBingo()
 	}
 
 	return nil
 }
 
-// UnmarkCell removes a mark from a cell (for corrections)
-// Referee can operate after game ends, will check if state needs reset
-func (g *Game) UnmarkCell(row, col int) error {
-	if g.Status == StatusWaiting {
-		return ErrGameNotStarted
-	}
-
-	if row < 0 || row > 4 || col < 0 || col > 4 {
-		return errors.New("invalid cell position")
-	}
-
-	cell := &g.Board.Cells[row][col]
-
-	if g.Rule == RulePhase {
-		// Update row marks count
-		if cell.MarkedBy == ColorRed && g.RedRowMarks[row] > 0 {
-			g.RedRowMarks[row]--
-		} else if cell.MarkedBy == ColorBlue && g.BlueRowMarks[row] > 0 {
-			g.BlueRowMarks[row]--
+// checkPhaseBingo checks for vertical and diagonal Bingo
+func (g *Game) checkPhaseBingo() bool {
+	for col := 0; col < 5; col++ {
+		if g.checkPhaseLineBingo(0, col, 1, 0, col) {
+			return true
 		}
 	}
 
-	cell.MarkedBy = ColorNone
-	cell.Times = 0
+	if g.checkPhaseLineBingo(0, 0, 1, 1, 5) {
+		return true
+	}
+	if g.checkPhaseLineBingo(0, 4, 1, -1, 6) {
+		return true
+	}
 
-	// Re-check winner status (phase rule doesn't check here)
-	if g.Rule != RulePhase {
-		g.CheckWin()
+	return false
+}
+
+// checkPhaseLineBingo checks if a line has Bingo
+func (g *Game) checkPhaseLineBingo(startRow, startCol, dRow, dCol, lineIndex int) bool {
+	redCount := 0
+	blueCount := 0
+
+	for i := 0; i < 5; i++ {
+		cell := g.Board.Cells[startRow+i*dRow][startCol+i*dCol]
+		if cell.MarkedBy == ColorRed || cell.SecondMark == ColorRed {
+			redCount++
+		}
+		if cell.MarkedBy == ColorBlue || cell.SecondMark == ColorBlue {
+			blueCount++
+		}
+	}
+
+	if redCount == 5 && g.BingoAchiever == ColorNone {
+		g.BingoAchiever = ColorRed
+		g.BingoLine = lineIndex
+		return true
+	}
+	if blueCount == 5 && g.BingoAchiever == ColorNone {
+		g.BingoAchiever = ColorBlue
+		g.BingoLine = lineIndex
+		return true
+	}
+
+	return false
+}
+
+// CanSettle checks if a player can trigger settlement
+func (g *Game) CanSettle(player PlayerColor) bool {
+	var rowMarks int
+	if player == ColorRed {
+		rowMarks = g.RedRowMarks[4]
+	} else {
+		rowMarks = g.BlueRowMarks[4]
+	}
+	return rowMarks >= 2
+}
+
+// Settle triggers settlement for a player
+func (g *Game) Settle(player PlayerColor) error {
+	if g.Status != StatusPlaying {
+		return ErrGameNotStarted
+	}
+
+	if player == ColorRed && g.RedSettled {
+		return ErrAlreadySettled
+	}
+	if player == ColorBlue && g.BlueSettled {
+		return ErrAlreadySettled
+	}
+
+	// First settler must meet conditions, second settler can settle without conditions
+	if g.FirstSettler == ColorNone {
+		// This is the first settler - must meet conditions
+		if !g.CanSettle(player) {
+			return ErrCannotSettleYet
+		}
+		g.FirstSettler = player
+	}
+	// Second settler doesn't need to meet any conditions
+
+	if player == ColorRed {
+		g.RedSettled = true
+	} else {
+		g.BlueSettled = true
+	}
+
+	if g.RedSettled && g.BlueSettled {
+		g.checkPhaseWin()
 	}
 
 	return nil
@@ -193,40 +290,33 @@ func (g *Game) UnmarkCell(row, col int) error {
 // CalculatePhaseScore calculates scores for phase rule
 func (g *Game) CalculatePhaseScore() (redScore, blueScore int) {
 	for row := 0; row < 5; row++ {
-		rowScore := g.PhaseConfig.RowScores[row]
-
 		for col := 0; col < 5; col++ {
 			cell := g.Board.Cells[row][col]
 
 			if cell.MarkedBy == ColorRed {
-				if cell.Times > 0 {
-					// Red was first, Blue marked after
-					redScore += rowScore
-					blueScore += int(float64(rowScore) * g.PhaseConfig.SecondHalfRate)
-				} else {
-					redScore += rowScore
-				}
+				redScore += g.PhaseConfig.RowScores[row]
 			} else if cell.MarkedBy == ColorBlue {
-				if cell.Times > 0 {
-					// Blue was first, Red marked after
-					blueScore += rowScore
-					redScore += int(float64(rowScore) * g.PhaseConfig.SecondHalfRate)
-				} else {
-					blueScore += rowScore
-				}
+				blueScore += g.PhaseConfig.RowScores[row]
+			}
+
+			if cell.SecondMark == ColorRed {
+				redScore += g.PhaseConfig.SecondHalfScores[row]
+			} else if cell.SecondMark == ColorBlue {
+				blueScore += g.PhaseConfig.SecondHalfScores[row]
 			}
 		}
 	}
 
-	// Add final bonus
-	if g.PhaseConfig.FinalBonus > 0 {
-		// Final bonus goes to player with more marks
-		redCount, blueCount := g.CountMarks()
-		if redCount > blueCount {
-			redScore += g.PhaseConfig.FinalBonus
-		} else if blueCount > redCount {
-			blueScore += g.PhaseConfig.FinalBonus
-		}
+	if g.BingoAchiever == ColorRed {
+		redScore += g.PhaseConfig.BingoBonus
+	} else if g.BingoAchiever == ColorBlue {
+		blueScore += g.PhaseConfig.BingoBonus
+	}
+
+	if g.FirstSettler == ColorRed {
+		redScore += g.PhaseConfig.FinalBonus
+	} else if g.FirstSettler == ColorBlue {
+		blueScore += g.PhaseConfig.FinalBonus
 	}
 
 	return redScore, blueScore
@@ -237,9 +327,10 @@ func (g *Game) CountMarks() (redCount, blueCount int) {
 	for i := 0; i < 5; i++ {
 		for j := 0; j < 5; j++ {
 			cell := g.Board.Cells[i][j]
-			if cell.MarkedBy == ColorRed {
+			if cell.MarkedBy == ColorRed || cell.SecondMark == ColorRed {
 				redCount++
-			} else if cell.MarkedBy == ColorBlue {
+			}
+			if cell.MarkedBy == ColorBlue || cell.SecondMark == ColorBlue {
 				blueCount++
 			}
 		}
@@ -252,9 +343,15 @@ func (g *Game) Reset() {
 	g.Board = NewBoard()
 	g.Status = StatusWaiting
 	g.Winner = nil
-	g.CurrentRow = 0
 	g.RedRowMarks = [5]int{}
 	g.BlueRowMarks = [5]int{}
+	g.RedUnlockedRow = 0
+	g.BlueUnlockedRow = 0
+	g.BingoAchiever = ColorNone
+	g.BingoLine = -1
+	g.RedSettled = false
+	g.BlueSettled = false
+	g.FirstSettler = ColorNone
 }
 
 // GetState returns the current game state
@@ -262,7 +359,7 @@ func (g *Game) GetState() *Game {
 	return g
 }
 
-// CheckWin checks if there's a winner and updates game state
+// CheckWin checks if there is a winner and updates game state
 func (g *Game) CheckWin() *Winner {
 	var winner *Winner
 
@@ -272,7 +369,6 @@ func (g *Game) CheckWin() *Winner {
 	case RuleBlackout:
 		winner = g.checkBlackoutWin()
 	case RulePhase:
-		// Not implemented yet
 		return nil
 	}
 
@@ -280,7 +376,6 @@ func (g *Game) CheckWin() *Winner {
 		g.Status = StatusFinished
 		g.Winner = winner
 	} else {
-		// If previously finished but now no winner, reset to playing
 		if g.Status == StatusFinished {
 			g.Status = StatusPlaying
 		}
@@ -290,11 +385,32 @@ func (g *Game) CheckWin() *Winner {
 	return winner
 }
 
+// checkPhaseWin checks and sets winner for phase rule after both settled
+func (g *Game) checkPhaseWin() *Winner {
+	redScore, blueScore := g.CalculatePhaseScore()
+
+	var winner PlayerColor
+	if redScore > blueScore {
+		winner = ColorRed
+	} else if blueScore > redScore {
+		winner = ColorBlue
+	} else {
+		winner = g.FirstSettler
+	}
+
+	g.Winner = &Winner{
+		Winner:    winner,
+		Reason:    WinReasonPhase,
+		RedScore:  redScore,
+		BlueScore: blueScore,
+	}
+	g.Status = StatusFinished
+
+	return g.Winner
+}
+
 // checkNormalWin checks for winner in normal rule
 func (g *Game) checkNormalWin() *Winner {
-	// Check all lines (5 horizontal + 5 vertical + 2 diagonal = 12 lines)
-	
-	// Horizontal lines
 	for row := 0; row < 5; row++ {
 		if winner := g.checkLineWin(row, 0, 0, 1); winner != ColorNone {
 			redCount, blueCount := g.CountMarks()
@@ -307,7 +423,6 @@ func (g *Game) checkNormalWin() *Winner {
 		}
 	}
 
-	// Vertical lines
 	for col := 0; col < 5; col++ {
 		if winner := g.checkLineWin(0, col, 1, 0); winner != ColorNone {
 			redCount, blueCount := g.CountMarks()
@@ -320,7 +435,6 @@ func (g *Game) checkNormalWin() *Winner {
 		}
 	}
 
-	// Diagonal lines
 	if winner := g.checkLineWin(0, 0, 1, 1); winner != ColorNone {
 		redCount, blueCount := g.CountMarks()
 		return &Winner{
@@ -340,7 +454,6 @@ func (g *Game) checkNormalWin() *Winner {
 		}
 	}
 
-	// Check if board is full
 	return g.checkFullBoard()
 }
 
@@ -366,19 +479,17 @@ func (g *Game) checkFullBoard() *Winner {
 	redCount, blueCount := g.CountMarks()
 	total := redCount + blueCount
 
-	// If board is not full, return nil
 	if total < 25 {
 		return nil
 	}
 
-	// Board is full, player with more cells wins
 	var winner PlayerColor
 	if redCount > blueCount {
 		winner = ColorRed
 	} else if blueCount > redCount {
 		winner = ColorBlue
 	} else {
-		winner = ColorNone // Draw
+		winner = ColorNone
 	}
 
 	return &Winner{
@@ -393,7 +504,6 @@ func (g *Game) checkFullBoard() *Winner {
 func (g *Game) checkBlackoutWin() *Winner {
 	redCount, blueCount := g.CountMarks()
 
-	// Player wins when completing all 25 cells
 	if redCount == 25 {
 		return &Winner{
 			Winner:    ColorRed,
@@ -436,4 +546,158 @@ func (g *Game) SetAllCellTexts(texts []string) error {
 		}
 	}
 	return nil
+}
+
+// UnmarkCell removes all marks from a cell (for referee)
+// For clearing a specific color, use ClearCellMark
+func (g *Game) UnmarkCell(row, col int) error {
+	if g.Status == StatusWaiting {
+		return ErrGameNotStarted
+	}
+
+	if row < 0 || row > 4 || col < 0 || col > 4 {
+		return errors.New("invalid cell position")
+	}
+
+	cell := &g.Board.Cells[row][col]
+
+	if g.Rule == RulePhase {
+		// Update row marks count
+		if cell.MarkedBy == ColorRed && g.RedRowMarks[row] > 0 {
+			g.RedRowMarks[row]--
+		} else if cell.MarkedBy == ColorBlue && g.BlueRowMarks[row] > 0 {
+			g.BlueRowMarks[row]--
+		}
+		if cell.SecondMark == ColorRed && g.RedRowMarks[row] > 0 {
+			g.RedRowMarks[row]--
+		} else if cell.SecondMark == ColorBlue && g.BlueRowMarks[row] > 0 {
+			g.BlueRowMarks[row]--
+		}
+	}
+
+	cell.MarkedBy = ColorNone
+	cell.SecondMark = ColorNone
+	cell.Times = 0
+
+	// Re-check winner status (phase rule doesn't check here)
+	if g.Rule != RulePhase {
+		g.CheckWin()
+	}
+
+	return nil
+}
+
+// ClearCellMark clears a specific color mark from a cell
+// Used for blackout and phase rules where both colors can be on the same cell
+func (g *Game) ClearCellMark(row, col int, player PlayerColor) error {
+	if g.Status == StatusWaiting {
+		return ErrGameNotStarted
+	}
+
+	if row < 0 || row > 4 || col < 0 || col > 4 {
+		return errors.New("invalid cell position")
+	}
+
+	cell := &g.Board.Cells[row][col]
+
+	// Handle based on which mark to clear
+	if cell.MarkedBy == player {
+		// First mark is the one to clear
+		// Promote second mark to first if exists
+		cell.MarkedBy = cell.SecondMark
+		cell.SecondMark = ColorNone
+		if cell.Times > 0 {
+			cell.Times--
+		}
+
+		// Update phase rule tracking
+		if g.Rule == RulePhase {
+			if player == ColorRed && g.RedRowMarks[row] > 0 {
+				g.RedRowMarks[row]--
+			} else if player == ColorBlue && g.BlueRowMarks[row] > 0 {
+				g.BlueRowMarks[row]--
+			}
+		}
+	} else if cell.SecondMark == player {
+		// Second mark is the one to clear
+		cell.SecondMark = ColorNone
+		if cell.Times > 0 {
+			cell.Times--
+		}
+
+		// Update phase rule tracking
+		if g.Rule == RulePhase {
+			if player == ColorRed && g.RedRowMarks[row] > 0 {
+				g.RedRowMarks[row]--
+			} else if player == ColorBlue && g.BlueRowMarks[row] > 0 {
+				g.BlueRowMarks[row]--
+			}
+		}
+	}
+	// If player has no mark on this cell, do nothing
+
+	// For phase rule, recheck Bingo status after clearing
+	if g.Rule == RulePhase {
+		g.recheckPhaseBingo()
+	}
+
+	return nil
+}
+
+// recheckPhaseBingo rechecks Bingo status after a mark is cleared
+// If the current Bingo line is broken, clear it and try to find a new one
+func (g *Game) recheckPhaseBingo() {
+	if g.BingoAchiever == ColorNone {
+		return
+	}
+
+	// Check if current Bingo line is still valid
+	if g.BingoLine >= 0 && g.BingoLine < 5 {
+		// Vertical line
+		col := g.BingoLine
+		valid := true
+		for row := 0; row < 5; row++ {
+			cell := g.Board.Cells[row][col]
+			if cell.MarkedBy != g.BingoAchiever && cell.SecondMark != g.BingoAchiever {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return // Bingo still valid
+		}
+	} else if g.BingoLine == 5 {
+		// Diagonal top-left to bottom-right
+		valid := true
+		for i := 0; i < 5; i++ {
+			cell := g.Board.Cells[i][i]
+			if cell.MarkedBy != g.BingoAchiever && cell.SecondMark != g.BingoAchiever {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return // Bingo still valid
+		}
+	} else if g.BingoLine == 6 {
+		// Diagonal top-right to bottom-left
+		valid := true
+		for i := 0; i < 5; i++ {
+			cell := g.Board.Cells[i][4-i]
+			if cell.MarkedBy != g.BingoAchiever && cell.SecondMark != g.BingoAchiever {
+				valid = false
+				break
+			}
+		}
+		if valid {
+			return // Bingo still valid
+		}
+	}
+
+	// Current Bingo is broken, clear it
+	g.BingoAchiever = ColorNone
+	g.BingoLine = -1
+
+	// Try to find a new Bingo (first one found wins)
+	g.checkPhaseBingo()
 }

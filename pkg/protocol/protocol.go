@@ -18,12 +18,14 @@ const (
 	MsgSetPassword MessageType = "set_password"
 
 	// Game operations
-	MsgMarkCell    MessageType = "mark_cell"
-	MsgUnmarkCell  MessageType = "unmark_cell"
-	MsgSetRule     MessageType = "set_rule"
-	MsgStartGame   MessageType = "start_game"
-	MsgResetGame   MessageType = "reset_game"
-	MsgSetCellText MessageType = "set_cell_text" // 新增
+	MsgMarkCell      MessageType = "mark_cell"
+	MsgUnmarkCell    MessageType = "unmark_cell"
+	MsgClearCellMark MessageType = "clear_cell_mark"
+	MsgSetRule       MessageType = "set_rule"
+	MsgStartGame     MessageType = "start_game"
+	MsgResetGame     MessageType = "reset_game"
+	MsgSetCellText   MessageType = "set_cell_text"
+	MsgSettle        MessageType = "settle"
 
 	// Responses/Broadcasts
 	MsgStateUpdate MessageType = "state_update"
@@ -60,7 +62,7 @@ type JoinRoomPayload struct {
 	UserName string `json:"user_name"`
 }
 
-// SetRolePayload represents the payload for setting a user's role
+// SetRolePayload represents the payload for setting a user role
 type SetRolePayload struct {
 	TargetUserID string `json:"target_user_id"`
 	Role         string `json:"role"`
@@ -69,62 +71,79 @@ type SetRolePayload struct {
 
 // MarkCellPayload represents the payload for marking a cell
 type MarkCellPayload struct {
-	Row   int `json:"row"`
-	Col   int `json:"col"`
+	Row   int    `json:"row"`
+	Col   int    `json:"col"`
+	Color string `json:"color"`
+}
+
+// ClearCellMarkPayload represents the payload for clearing a specific color mark
+type ClearCellMarkPayload struct {
+	Row   int    `json:"row"`
+	Col   int    `json:"col"`
 	Color string `json:"color"`
 }
 
 // SetRulePayload represents the payload for setting game rule
 type SetRulePayload struct {
-	Rule        string `json:"rule"`
+	Rule        string             `json:"rule"`
 	PhaseConfig PhaseConfigPayload `json:"phase_config,omitempty"`
 }
 
 // SetCellTextPayload represents the payload for setting cell text
 type SetCellTextPayload struct {
-	Row  int    `json:"row,omitempty"`
-	Col  int    `json:"col,omitempty"`
-	Text string `json:"text,omitempty"`
-	// 批量设置时使用
+	Row   int      `json:"row,omitempty"`
+	Col   int      `json:"col,omitempty"`
+	Text  string   `json:"text,omitempty"`
 	Texts []string `json:"texts,omitempty"`
+}
+
+// SettlePayload represents the payload for settlement (phase rule)
+type SettlePayload struct {
+	Player string `json:"player"`
 }
 
 // PhaseConfigPayload represents phase rule configuration
 type PhaseConfigPayload struct {
-	RowScores       []int   `json:"row_scores"`
-	SecondHalfRate  float64 `json:"second_half_rate"`
-	FinalBonus      int     `json:"final_bonus"`
-	FinalBonusType  string  `json:"final_bonus_type"`
-	CellsPerRow     int     `json:"cells_per_row"`
-	UnlockThreshold int     `json:"unlock_threshold"`
+	RowScores        []int `json:"row_scores"`
+	SecondHalfScores []int `json:"second_half_scores"`
+	CellsPerRow      int   `json:"cells_per_row"`
+	UnlockThreshold  int   `json:"unlock_threshold"`
+	BingoBonus       int   `json:"bingo_bonus"`
+	FinalBonus       int   `json:"final_bonus"`
 }
 
 // StateUpdatePayload represents the full game state
 type StateUpdatePayload struct {
-	Room         RoomPayload   `json:"room"`
-	Game         GamePayload   `json:"game"`
-	Users        []UserPayload `json:"users"`
-	CurrentUser  string        `json:"current_user"`
+	Room        RoomPayload   `json:"room"`
+	Game        GamePayload   `json:"game"`
+	Users       []UserPayload `json:"users"`
+	CurrentUser string        `json:"current_user"`
 }
 
 // RoomPayload represents room information
 type RoomPayload struct {
-	ID       string `json:"id"`
-	Name     string `json:"name"`
-	OwnerID  string `json:"owner_id"`
-	HasPassword bool `json:"has_password"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	OwnerID     string `json:"owner_id"`
+	HasPassword bool   `json:"has_password"`
 }
 
 // GamePayload represents game state
 type GamePayload struct {
-	Board        BoardPayload        `json:"board"`
-	Rule         string              `json:"rule"`
-	PhaseConfig  PhaseConfigPayload  `json:"phase_config,omitempty"`
-	Status       string              `json:"status"`
-	Winner       *WinnerPayload      `json:"winner,omitempty"`
-	RedRowMarks  []int               `json:"red_row_marks,omitempty"`
-	BlueRowMarks []int               `json:"blue_row_marks,omitempty"`
-	CurrentRow   int                 `json:"current_row,omitempty"`
+	Board           BoardPayload       `json:"board"`
+	Rule            string             `json:"rule"`
+	PhaseConfig     PhaseConfigPayload `json:"phase_config,omitempty"`
+	Status          string             `json:"status"`
+	Winner          *WinnerPayload     `json:"winner,omitempty"`
+	RedRowMarks     []int              `json:"red_row_marks,omitempty"`
+	BlueRowMarks    []int              `json:"blue_row_marks,omitempty"`
+	RedUnlockedRow  int                `json:"red_unlocked_row,omitempty"`
+	BlueUnlockedRow int                `json:"blue_unlocked_row,omitempty"`
+	BingoAchiever   string             `json:"bingo_achiever,omitempty"`
+	BingoLine       int                `json:"bingo_line,omitempty"`
+	RedSettled      bool               `json:"red_settled,omitempty"`
+	BlueSettled     bool               `json:"blue_settled,omitempty"`
+	FirstSettler    string             `json:"first_settler,omitempty"`
 }
 
 // BoardPayload represents the board state
@@ -134,9 +153,10 @@ type BoardPayload struct {
 
 // CellPayload represents a cell state
 type CellPayload struct {
-	MarkedBy string `json:"marked_by"`
-	Times    int    `json:"times"`
-	Text     string `json:"text"`
+	MarkedBy   string `json:"marked_by"`
+	SecondMark string `json:"second_mark,omitempty"`
+	Times      int    `json:"times"`
+	Text       string `json:"text"`
 }
 
 // UserPayload represents user information

@@ -68,31 +68,32 @@ func GameRuleFromString(s string) GameRule {
 
 // PhaseConfig holds configuration for phase rule
 type PhaseConfig struct {
-	RowScores       [5]int   `json:"row_scores"`        // Score per row, default: [2, 2, 4, 4, 6]
-	SecondHalfRate  float64  `json:"second_half_rate"`  // Rate for second player marking same cell, default: 0.5
-	FinalBonus      int      `json:"final_bonus"`       // Bonus for triggering final calculation, default: 0
-	FinalBonusType  string   `json:"final_bonus_type"`  // Type of final bonus calculation
-	CellsPerRow     int      `json:"cells_per_row"`     // Max cells each player can mark per row, default: 3
-	UnlockThreshold int      `json:"unlock_threshold"`  // Cells needed to unlock next row, default: 2
+	RowScores        [5]int `json:"row_scores"`         // A[n]: Score per row, default: [2, 2, 4, 4, 6]
+	SecondHalfScores [5]int `json:"second_half_scores"` // B[n]: Score for second player, default: [1, 1, 2, 2, 3]
+	CellsPerRow      int    `json:"cells_per_row"`      // C: Max cells each player can mark per row, default: 3
+	UnlockThreshold  int    `json:"unlock_threshold"`   // D: Cells needed to unlock next row, default: 2
+	BingoBonus       int    `json:"bingo_bonus"`        // E: Bonus for first Bingo, default: 3
+	FinalBonus       int    `json:"final_bonus"`        // F: Bonus for first settlement, default: 3
 }
 
 // DefaultPhaseConfig returns the default phase configuration
 func DefaultPhaseConfig() PhaseConfig {
 	return PhaseConfig{
-		RowScores:       [5]int{2, 2, 4, 4, 6},
-		SecondHalfRate:  0.5,
-		FinalBonus:      0,
-		FinalBonusType:  "fixed",
-		CellsPerRow:     3,
-		UnlockThreshold: 2,
+		RowScores:        [5]int{2, 2, 4, 4, 6},
+		SecondHalfScores: [5]int{1, 1, 2, 2, 3},
+		CellsPerRow:      3,
+		UnlockThreshold:  2,
+		BingoBonus:       3,
+		FinalBonus:       3,
 	}
 }
 
 // Cell represents a single cell on the board
 type Cell struct {
-	MarkedBy PlayerColor `json:"marked_by"` // Which player marked this cell
-	Times    int         `json:"times"`     // How many times marked (for blackout)
-	Text     string      `json:"text"`      // Text displayed in the cell
+	MarkedBy   PlayerColor `json:"marked_by"`   // Which player marked this cell first
+	SecondMark PlayerColor `json:"second_mark"` // Which player marked this cell second (for phase rule)
+	Times      int         `json:"times"`       // How many times marked (for blackout/phase)
+	Text       string      `json:"text"`        // Text displayed in the cell
 }
 
 // Board represents the 5x5 bingo board
@@ -134,6 +135,7 @@ const (
 	WinReasonBingo     WinReason = "bingo"
 	WinReasonFullBoard WinReason = "full_board"
 	WinReasonBlackout  WinReason = "blackout"
+	WinReasonPhase     WinReason = "phase" // Phase rule: settlement complete
 )
 
 // Winner represents the game result
@@ -152,8 +154,20 @@ type Game struct {
 	Status      GameStatus  `json:"status"`
 	Winner      *Winner     `json:"winner,omitempty"`
 
-	// For phase rule tracking
+	// For phase rule tracking - per-row marks
 	RedRowMarks  [5]int `json:"red_row_marks"`  // Marks per row for red
 	BlueRowMarks [5]int `json:"blue_row_marks"` // Marks per row for blue
-	CurrentRow   int    `json:"current_row"`    // Current unlocked row (phase rule)
+
+	// Per-player row unlock tracking
+	RedUnlockedRow  int `json:"red_unlocked_row"`  // Highest row unlocked by red
+	BlueUnlockedRow int `json:"blue_unlocked_row"` // Highest row unlocked by blue
+
+	// Bingo tracking (phase rule)
+	BingoAchiever PlayerColor `json:"bingo_achiever"` // Who achieved Bingo first
+	BingoLine     int         `json:"bingo_line"`     // Which line: 0-4 vertical, 5=diag\, 6=diag/
+
+	// Settlement tracking (phase rule)
+	RedSettled   bool        `json:"red_settled"`   // Whether red has settled
+	BlueSettled  bool        `json:"blue_settled"`  // Whether blue has settled
+	FirstSettler PlayerColor `json:"first_settler"` // Who settled first (for tie-breaking)
 }

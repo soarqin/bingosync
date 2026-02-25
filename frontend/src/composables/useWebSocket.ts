@@ -1,8 +1,10 @@
 import type { Message, StateUpdate, RoomInfo, ErrorPayload } from '../types';
 import { useGameStore } from '../stores/game';
+import { useLocaleStore } from '../stores/locale';
 
 export function useWebSocket() {
   const store = useGameStore();
+  const { t } = useLocaleStore();
 
   function connect(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
@@ -83,7 +85,11 @@ export function useWebSocket() {
         case 'error':
           if (msg.payload) {
             const payload = msg.payload as ErrorPayload;
-            store.setError(payload.message);
+            // Try to translate the error message
+            const errorKey = `errors.${payload.message}`;
+            const translated = t(errorKey);
+            // If translation found, use it; otherwise use original message
+            store.setError(translated !== errorKey ? translated : payload.message);
           }
           break;
         
@@ -150,6 +156,10 @@ export function useWebSocket() {
     send('unmark_cell', { row, col });
   }
 
+  function clearCellMark(row: number, col: number, color: string) {
+    send('clear_cell_mark', { row, col, color });
+  }
+
   function resetGame() {
     send('reset_game');
   }
@@ -166,6 +176,10 @@ export function useWebSocket() {
     send('set_cell_text', { texts });
   }
 
+  function settle(player: string) {
+    send('settle', { player });
+  }
+
   return {
     connect,
     disconnect,
@@ -180,9 +194,11 @@ export function useWebSocket() {
     startGame,
     markCell,
     unmarkCell,
+    clearCellMark,
     resetGame,
     setName,
     setCellText,
     setAllCellTexts,
+    settle,
   };
 }

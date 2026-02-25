@@ -26,18 +26,15 @@
           <div class="setting-group">
             <label>{{ t('settings.phaseConfig.rowScores') }}</label>
             <div class="row-scores">
-              <input v-for="i in 5" :key="i" type="number" v-model.number="phaseConfig.row_scores[i-1]" min="0" />
+              <input v-for="i in 5" :key="'a'+i" type="number" v-model.number="phaseConfig.row_scores[i-1]" min="0" />
             </div>
           </div>
           
           <div class="setting-group">
-            <label>{{ t('settings.phaseConfig.secondHalfRate') }}</label>
-            <input type="number" v-model.number="phaseConfig.second_half_rate" min="0" max="1" step="0.1" />
-          </div>
-          
-          <div class="setting-group">
-            <label>{{ t('settings.phaseConfig.finalBonus') }}</label>
-            <input type="number" v-model.number="phaseConfig.final_bonus" min="0" />
+            <label>{{ t('settings.phaseConfig.secondHalfScores') }}</label>
+            <div class="row-scores">
+              <input v-for="i in 5" :key="'b'+i" type="number" v-model.number="phaseConfig.second_half_scores[i-1]" min="0" />
+            </div>
           </div>
           
           <div class="setting-group">
@@ -48,6 +45,16 @@
           <div class="setting-group">
             <label>{{ t('settings.phaseConfig.unlockThreshold') }}</label>
             <input type="number" v-model.number="phaseConfig.unlock_threshold" min="1" max="10" />
+          </div>
+          
+          <div class="setting-group">
+            <label>{{ t('settings.phaseConfig.bingoBonus') }}</label>
+            <input type="number" v-model.number="phaseConfig.bingo_bonus" min="0" />
+          </div>
+          
+          <div class="setting-group">
+            <label>{{ t('settings.phaseConfig.finalBonus') }}</label>
+            <input type="number" v-model.number="phaseConfig.final_bonus" min="0" />
           </div>
         </template>
 
@@ -62,19 +69,13 @@
 
       <div class="dialog-footer">
         <button @click="applySettings" :disabled="!canChangeSettings">{{ t('settings.applySettings') }}</button>
-        <button v-if="game?.status === 'playing'" @click="handleReset" :disabled="!isOwner">
-          {{ t('game.resetBoard') }}
-        </button>
-        <button v-if="game?.status === 'finished'" @click="handleReset" :disabled="!isOwner" class="restart-btn">
-          {{ t('game.restart') }}
-        </button>
       </div>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch } from 'vue';
+import { ref, computed, watch, onMounted } from 'vue';
 import type { Game, PhaseConfig } from '../types';
 import { useGameStore } from '../stores/game';
 import { useWebSocket } from '../composables/useWebSocket';
@@ -84,34 +85,39 @@ const props = defineProps<{
   game: Game | null;
 }>();
 
-const emit = defineEmits<{
-  (e: 'reset'): void;
-}>();
-
 const store = useGameStore();
 const { setRule, setPassword } = useWebSocket();
 const { t } = useLocaleStore();
+
+const STORAGE_KEY_RULE = 'bingosync-settings-rule';
+const STORAGE_KEY_PHASE_CONFIG = 'bingosync-settings-phase-config';
 
 const showDialog = ref(false);
 const selectedRule = ref('normal');
 const showPassword = ref(false);
 const roomPassword = ref('');
+const lastAppliedRoomId = ref<string | null>(null);
 
 const defaultPhaseConfig: PhaseConfig = {
   row_scores: [2, 2, 4, 4, 6],
-  second_half_rate: 0.5,
-  final_bonus: 0,
-  final_bonus_type: 'fixed',
+  second_half_scores: [1, 1, 2, 2, 3],
   cells_per_row: 3,
   unlock_threshold: 2,
+  bingo_bonus: 3,
+  final_bonus: 3,
 };
 
 const phaseConfig = ref<PhaseConfig>({ ...defaultPhaseConfig });
 
 const isOwner = computed(() => store.isOwner);
-const isReferee = computed(() => store.isReferee);
 const canChangeSettings = computed(() => isOwner.value && props.game?.status === 'waiting');
 
+// Load settings from localStorage on mount
+onMounted(() => {
+  loadSettingsFromStorage();
+});
+
+// Watch for game changes to sync with current game state
 watch(() => props.game, (newGame) => {
   if (newGame) {
     selectedRule.value = newGame.rule;
@@ -121,15 +127,71 @@ watch(() => props.game, (newGame) => {
   }
 }, { immediate: true });
 
+// Auto-apply saved settings when entering a waiting room as owner
+watch([() => store.currentRoom, () => props.game?.status, () => store.isOwner], 
+  ([room, status, isOwner]) => {
+    if (!room || status !== 'waiting' || !isOwner) return;
+    
+    // Only apply once per room
+    if (lastAppliedRoomId.value === room.id) return;
+    lastAppliedRoomId.value = room.id;
+    
+    // Load and apply saved settings
+    const savedRule = localStorage.getItem(STORAGE_KEY_RULE);
+    const savedPhaseConfig = localStorage.getItem(STORAGE_KEY_PHASE_CONFIG);
+    
+    if (savedRule || savedPhaseConfig) {
+      loadSettingsFromStorage();
+      // Apply settings after a short delay to ensure room is ready
+      setTimeout(() => {
+        setRule(selectedRule.value, phaseConfig.value);
+      }, 100);
+    }
+  },
+  { immediate: true }
+);
+
+function loadSettingsFromStorage() {
+  try {
+    // Load rule
+    const savedRule = localStorage.getItem(STORAGE_KEY_RULE);
+    if (savedRule && ['normal', 'blackout', 'phase'].includes(savedRule)) {
+      selectedRule.value = savedRule;
+    }
+
+    // Load phase config
+    const savedPhaseConfig = localStorage.getItem(STORAGE_KEY_PHASE_CONFIG);
+    if (savedPhaseConfig) {
+      const parsed = JSON.parse(savedPhaseConfig);
+      if (parsed && typeof parsed === 'object') {
+        phaseConfig.value = { ...defaultPhaseConfig, ...parsed };
+      }
+    }
+  } catch (e) {
+    console.error('Failed to load settings from localStorage:', e);
+  }
+}
+
+function saveSettingsToStorage() {
+  try {
+    localStorage.setItem(STORAGE_KEY_RULE, selectedRule.value);
+    localStorage.setItem(STORAGE_KEY_PHASE_CONFIG, JSON.stringify(phaseConfig.value));
+  } catch (e) {
+    console.error('Failed to save settings to localStorage:', e);
+  }
+}
+
 function applySettings() {
+  // Apply settings to game
   setRule(selectedRule.value, phaseConfig.value);
   if (roomPassword.value !== '') {
     setPassword(roomPassword.value);
   }
-}
 
-function handleReset() {
-  emit('reset');
+  // Save settings to localStorage (except password)
+  saveSettingsToStorage();
+
+  // Close the dialog
   showDialog.value = false;
 }
 </script>
