@@ -562,17 +562,36 @@ func (g *Game) UnmarkCell(row, col int) error {
 	cell := &g.Board.Cells[row][col]
 
 	if g.Rule == RulePhase {
+		// Track which colors need row unlock recheck
+		needRedRecheck := false
+		needBlueRecheck := false
+
 		// Update row marks count
 		if cell.MarkedBy == ColorRed && g.RedRowMarks[row] > 0 {
 			g.RedRowMarks[row]--
+			needRedRecheck = true
 		} else if cell.MarkedBy == ColorBlue && g.BlueRowMarks[row] > 0 {
 			g.BlueRowMarks[row]--
+			needBlueRecheck = true
 		}
 		if cell.SecondMark == ColorRed && g.RedRowMarks[row] > 0 {
 			g.RedRowMarks[row]--
+			needRedRecheck = true
 		} else if cell.SecondMark == ColorBlue && g.BlueRowMarks[row] > 0 {
 			g.BlueRowMarks[row]--
+			needBlueRecheck = true
 		}
+
+		// Recheck row unlock for affected colors
+		if needRedRecheck {
+			g.recheckPhaseRowUnlock(ColorRed)
+		}
+		if needBlueRecheck {
+			g.recheckPhaseRowUnlock(ColorBlue)
+		}
+
+		// Recheck Bingo status
+		g.recheckPhaseBingo()
 	}
 
 	cell.MarkedBy = ColorNone
@@ -636,12 +655,41 @@ func (g *Game) ClearCellMark(row, col int, player PlayerColor) error {
 	}
 	// If player has no mark on this cell, do nothing
 
-	// For phase rule, recheck Bingo status after clearing
+	// For phase rule, recheck Bingo status and row unlock after clearing
 	if g.Rule == RulePhase {
+		g.recheckPhaseRowUnlock(player)
 		g.recheckPhaseBingo()
 	}
 
 	return nil
+}
+
+// recheckPhaseRowUnlock checks if we need to rollback row unlock after clearing a mark
+func (g *Game) recheckPhaseRowUnlock(player PlayerColor) {
+	var unlockedRow *int
+	var rowMarks []int
+	if player == ColorRed {
+		unlockedRow = &g.RedUnlockedRow
+		rowMarks = g.RedRowMarks[:]
+	} else {
+		unlockedRow = &g.BlueUnlockedRow
+		rowMarks = g.BlueRowMarks[:]
+	}
+
+	// Check from the current unlocked row backwards
+	// To keep row N unlocked, row N-1 must have enough marks (>= threshold)
+	// If row N-1 doesn't meet the threshold, we need to rollback to N-1
+	for *unlockedRow > 0 {
+		// Check if the previous row still meets the threshold
+		prevRow := *unlockedRow - 1
+		if rowMarks[prevRow] >= g.PhaseConfig.UnlockThreshold {
+			// Previous row still meets threshold, no rollback needed
+			break
+		}
+
+		// Previous row doesn't meet threshold, rollback
+		*unlockedRow--
+	}
 }
 
 // recheckPhaseBingo rechecks Bingo status after a mark is cleared
