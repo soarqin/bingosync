@@ -369,7 +369,9 @@ onMounted(() => {
       <template v-else>
         <div class="room-header">
           <h2>{{ currentRoom?.name }}</h2>
-          <div class="room-actions">
+          
+          <!-- Board controls in header center -->
+          <div class="board-controls-header">
             <!-- Import/Export buttons (owner only, waiting status) -->
             <template v-if="store.isOwner && game?.status === 'waiting'">
               <input 
@@ -379,10 +381,10 @@ onMounted(() => {
                 @change="handleFileImport"
                 style="display: none"
               />
-              <button @click="handleImportClick" class="action-btn import-btn">
+              <button @click="handleImportClick" class="control-btn import-btn">
                 📥 {{ t('game.importText') }}
               </button>
-              <button @click="handleExport" class="action-btn export-btn">
+              <button @click="handleExport" class="control-btn export-btn">
                 📤 {{ t('game.exportText') }}
               </button>
             </template>
@@ -391,20 +393,24 @@ onMounted(() => {
             <button 
               v-if="store.isOwner"
               @click="game?.status === 'waiting' ? startGame() : resetGame()" 
-              class="action-btn"
+              class="control-btn"
               :class="game?.status === 'waiting' ? 'start-btn' : 'reset-btn'"
             >
               <template v-if="game?.status === 'waiting'">🎮 {{ t('game.startGame') }}</template>
               <template v-else>🔄 {{ game?.status === 'finished' ? t('game.restart') : t('game.resetBoard') }}</template>
             </button>
-            
+          </div>
+          
+          <div class="room-actions">
+            <!-- Room settings button -->
+            <RoomSettings :game="game" />
             <button @click="handleLeaveRoom" class="leave-btn">{{ t('room.leaveRoom') }}</button>
           </div>
         </div>
         
         <div class="game-container">
           <div class="left-panel">
-            <BingoBoard 
+            <BingoBoard
               v-if="game?.board" 
               ref="bingoBoardRef"
               :board="game.board" 
@@ -419,9 +425,6 @@ onMounted(() => {
             
             <!-- Control buttons section -->
             <div class="control-section">
-              <!-- Room settings -->
-              <RoomSettings :game="game" />
-              
               <!-- Referee color picker -->
               <div v-if="store.isReferee && (game?.status === 'playing' || game?.status === 'finished')" class="color-picker">
                 <span>{{ t('game.selectColor') }}:</span>
@@ -480,6 +483,12 @@ onMounted(() => {
                   </div>
                 </template>
               </template>
+
+              <!-- Waiting state message -->
+              <div v-if="game?.status === 'waiting'" class="waiting-status">
+                <span class="waiting-icon">⏳</span>
+                <span class="waiting-text">{{ t('game.waiting') }}</span>
+              </div>
             </div>
           </div>
         </div>
@@ -699,6 +708,7 @@ body {
   flex: 1;
   padding: 20px;
   overflow-y: auto;
+  overflow-x: hidden;
 }
 
 .disconnected {
@@ -715,6 +725,7 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  position: relative;
 }
 
 .room-header h2 {
@@ -731,44 +742,6 @@ body {
   padding: 8px 16px;
 }
 
-.action-btn {
-  font-weight: 500;
-}
-
-.import-btn {
-  background: var(--info-color);
-}
-
-.import-btn:hover {
-  background: var(--info-hover);
-}
-
-.export-btn {
-  background: var(--success-color);
-}
-
-.export-btn:hover {
-  background: var(--success-hover);
-}
-
-.start-btn {
-  background: var(--success-color);
-  font-weight: bold;
-}
-
-.start-btn:hover {
-  background: var(--success-hover);
-}
-
-.reset-btn {
-  background: var(--warning-color);
-  font-weight: bold;
-}
-
-.reset-btn:hover {
-  background: #e67e22;
-}
-
 .leave-btn {
   background: var(--accent-color);
 }
@@ -780,14 +753,68 @@ body {
 .game-container {
   display: flex;
   gap: 20px;
+  overflow: hidden;
+  width: 100%;
+  box-sizing: border-box;
 }
 
 .left-panel {
   flex: 1;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   min-width: 0;
+  overflow: hidden;
+}
+
+.board-controls-header {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  justify-content: center;
+  gap: 10px;
+}
+
+.board-controls-header .control-btn {
+  padding: 8px 16px;
+  font-weight: 500;
+  font-size: 13px;
+}
+
+.board-controls-header .import-btn {
+  background: var(--info-color);
+}
+
+.board-controls-header .import-btn:hover {
+  background: var(--info-hover);
+}
+
+.board-controls-header .export-btn {
+  background: var(--success-color);
+}
+
+.board-controls-header .export-btn:hover {
+  background: var(--success-hover);
+}
+
+.board-controls-header .start-btn {
+  background: var(--success-color);
+  font-weight: bold;
+}
+
+.board-controls-header .start-btn:hover {
+  background: var(--success-hover);
+}
+
+.board-controls-header .reset-btn {
+  background: var(--warning-color);
+  font-weight: bold;
+}
+
+.board-controls-header .reset-btn:hover {
+  background: #e67e22;
 }
 
 .right-panel {
@@ -806,18 +833,38 @@ body {
   gap: 10px;
 }
 
+.waiting-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 20px 10px;
+  color: var(--text-muted);
+  font-size: 14px;
+}
+
+.waiting-icon {
+  font-size: 20px;
+  animation: pulse 2s infinite;
+}
+
+.waiting-text {
+  font-weight: 500;
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
 .control-btn {
   padding: 10px 16px;
   font-size: 14px;
   font-weight: bold;
-}
-
-.start-btn {
-  background: var(--success-color);
-}
-
-.start-btn:hover:not(:disabled) {
-  background: var(--success-hover);
 }
 
 .color-picker {
@@ -870,15 +917,6 @@ body {
   border-color: var(--warning-color);
   transform: scale(1.05);
   box-shadow: 0 0 10px rgba(243, 156, 18, 0.5);
-}
-
-/* Reset button */
-.reset-btn {
-  background: var(--warning-color);
-}
-
-.reset-btn:hover:not(:disabled) {
-  background: #e67e22;
 }
 
 /* Settlement buttons */

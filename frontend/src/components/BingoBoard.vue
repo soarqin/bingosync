@@ -304,35 +304,29 @@ const canMark = computed(() => {
   return false;
 });
 
-const redCount = computed(() => {
-  // For phase rule, calculate actual score
-  if (props.game?.rule === 'phase' && props.game.phase_config) {
-    return calculatePhaseScore('red');
-  }
-  // For other rules, count marked cells
-  let count = 0;
-  for (const row of props.board.cells) {
-    for (const cell of row) {
-      if (cell.marked_by === 'red') count++;
-    }
-  }
-  return count;
-});
+const redCount = computed(() => calculateScores().red);
 
-const blueCount = computed(() => {
+const blueCount = computed(() => calculateScores().blue);
+
+// Calculate scores for both players
+function calculateScores(): { red: number; blue: number } {
   // For phase rule, calculate actual score
   if (props.game?.rule === 'phase' && props.game.phase_config) {
-    return calculatePhaseScore('blue');
+    return {
+      red: calculatePhaseScore('red'),
+      blue: calculatePhaseScore('blue')
+    };
   }
   // For other rules, count marked cells
-  let count = 0;
+  let red = 0, blue = 0;
   for (const row of props.board.cells) {
     for (const cell of row) {
-      if (cell.marked_by === 'blue') count++;
+      if (cell.marked_by === 'red') red++;
+      if (cell.marked_by === 'blue') blue++;
     }
   }
-  return count;
-});
+  return { red, blue };
+}
 
 // Calculate phase rule score for a player
 function calculatePhaseScore(color: 'red' | 'blue'): number {
@@ -837,7 +831,8 @@ function handleExport() {
   gap: 15px;
   width: 100%;
   height: 100%;
-  min-height: 0; /* Allow flexbox to shrink */
+  min-height: 0;
+  box-sizing: border-box;
 }
 
 .board {
@@ -848,11 +843,15 @@ function handleExport() {
   background: var(--bg-quaternary);
   padding: 8px;
   border-radius: 8px;
-  /* Reserve space for game-info-section below (approximately 80px) */
-  width: min(100%, calc(100vh - 200px));
-  max-width: 600px;
+  /* Board size is limited by container width and available height */
+  /* Use CSS custom property for max-height calculation */
+  width: 100%;
+  max-width: min(600px, calc(100vh - 280px));
   aspect-ratio: 1;
-  flex-shrink: 1; /* Allow board to shrink if needed */
+  flex-shrink: 1;
+  flex-grow: 0;
+  margin: 0 auto;
+  box-sizing: border-box;
 }
 
 .row {
@@ -975,6 +974,9 @@ function handleExport() {
   padding: 10px;
   background: var(--bg-tertiary);
   border-radius: 8px;
+  width: 100%;
+  max-width: min(600px, calc(100vh - 280px));
+  box-sizing: border-box;
 }
 
 .scores-row {

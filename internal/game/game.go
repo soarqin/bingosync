@@ -411,50 +411,40 @@ func (g *Game) checkPhaseWin() *Winner {
 
 // checkNormalWin checks for winner in normal rule
 func (g *Game) checkNormalWin() *Winner {
+	// Check rows
 	for row := 0; row < 5; row++ {
 		if winner := g.checkLineWin(row, 0, 0, 1); winner != ColorNone {
-			redCount, blueCount := g.CountMarks()
-			return &Winner{
-				Winner:    winner,
-				Reason:    WinReasonBingo,
-				RedScore:  redCount,
-				BlueScore: blueCount,
-			}
+			return g.newBingoWinner(winner)
 		}
 	}
 
+	// Check columns
 	for col := 0; col < 5; col++ {
 		if winner := g.checkLineWin(0, col, 1, 0); winner != ColorNone {
-			redCount, blueCount := g.CountMarks()
-			return &Winner{
-				Winner:    winner,
-				Reason:    WinReasonBingo,
-				RedScore:  redCount,
-				BlueScore: blueCount,
-			}
+			return g.newBingoWinner(winner)
 		}
 	}
 
+	// Check diagonals
 	if winner := g.checkLineWin(0, 0, 1, 1); winner != ColorNone {
-		redCount, blueCount := g.CountMarks()
-		return &Winner{
-			Winner:    winner,
-			Reason:    WinReasonBingo,
-			RedScore:  redCount,
-			BlueScore: blueCount,
-		}
+		return g.newBingoWinner(winner)
 	}
 	if winner := g.checkLineWin(0, 4, 1, -1); winner != ColorNone {
-		redCount, blueCount := g.CountMarks()
-		return &Winner{
-			Winner:    winner,
-			Reason:    WinReasonBingo,
-			RedScore:  redCount,
-			BlueScore: blueCount,
-		}
+		return g.newBingoWinner(winner)
 	}
 
 	return g.checkFullBoard()
+}
+
+// newBingoWinner creates a Winner struct for bingo win
+func (g *Game) newBingoWinner(winner PlayerColor) *Winner {
+	redCount, blueCount := g.CountMarks()
+	return &Winner{
+		Winner:    winner,
+		Reason:    WinReasonBingo,
+		RedScore:  redCount,
+		BlueScore: blueCount,
+	}
 }
 
 // checkLineWin checks if a line is completely marked by one player
@@ -618,6 +608,7 @@ func (g *Game) ClearCellMark(row, col int, player PlayerColor) error {
 	}
 
 	cell := &g.Board.Cells[row][col]
+	cleared := false
 
 	// Handle based on which mark to clear
 	if cell.MarkedBy == player {
@@ -628,35 +619,23 @@ func (g *Game) ClearCellMark(row, col int, player PlayerColor) error {
 		if cell.Times > 0 {
 			cell.Times--
 		}
-
-		// Update phase rule tracking
-		if g.Rule == RulePhase {
-			if player == ColorRed && g.RedRowMarks[row] > 0 {
-				g.RedRowMarks[row]--
-			} else if player == ColorBlue && g.BlueRowMarks[row] > 0 {
-				g.BlueRowMarks[row]--
-			}
-		}
+		cleared = true
 	} else if cell.SecondMark == player {
 		// Second mark is the one to clear
 		cell.SecondMark = ColorNone
 		if cell.Times > 0 {
 			cell.Times--
 		}
-
-		// Update phase rule tracking
-		if g.Rule == RulePhase {
-			if player == ColorRed && g.RedRowMarks[row] > 0 {
-				g.RedRowMarks[row]--
-			} else if player == ColorBlue && g.BlueRowMarks[row] > 0 {
-				g.BlueRowMarks[row]--
-			}
-		}
+		cleared = true
 	}
-	// If player has no mark on this cell, do nothing
 
-	// For phase rule, recheck Bingo status and row unlock after clearing
-	if g.Rule == RulePhase {
+	// Update phase rule tracking (consolidated)
+	if g.Rule == RulePhase && cleared {
+		if player == ColorRed && g.RedRowMarks[row] > 0 {
+			g.RedRowMarks[row]--
+		} else if player == ColorBlue && g.BlueRowMarks[row] > 0 {
+			g.BlueRowMarks[row]--
+		}
 		g.recheckPhaseRowUnlock(player)
 		g.recheckPhaseBingo()
 	}
@@ -700,46 +679,8 @@ func (g *Game) recheckPhaseBingo() {
 	}
 
 	// Check if current Bingo line is still valid
-	if g.BingoLine >= 0 && g.BingoLine < 5 {
-		// Vertical line
-		col := g.BingoLine
-		valid := true
-		for row := 0; row < 5; row++ {
-			cell := g.Board.Cells[row][col]
-			if cell.MarkedBy != g.BingoAchiever && cell.SecondMark != g.BingoAchiever {
-				valid = false
-				break
-			}
-		}
-		if valid {
-			return // Bingo still valid
-		}
-	} else if g.BingoLine == 5 {
-		// Diagonal top-left to bottom-right
-		valid := true
-		for i := 0; i < 5; i++ {
-			cell := g.Board.Cells[i][i]
-			if cell.MarkedBy != g.BingoAchiever && cell.SecondMark != g.BingoAchiever {
-				valid = false
-				break
-			}
-		}
-		if valid {
-			return // Bingo still valid
-		}
-	} else if g.BingoLine == 6 {
-		// Diagonal top-right to bottom-left
-		valid := true
-		for i := 0; i < 5; i++ {
-			cell := g.Board.Cells[i][4-i]
-			if cell.MarkedBy != g.BingoAchiever && cell.SecondMark != g.BingoAchiever {
-				valid = false
-				break
-			}
-		}
-		if valid {
-			return // Bingo still valid
-		}
+	if g.isBingoLineValid(g.BingoLine, g.BingoAchiever) {
+		return // Bingo still valid
 	}
 
 	// Current Bingo is broken, clear it
@@ -748,4 +689,39 @@ func (g *Game) recheckPhaseBingo() {
 
 	// Try to find a new Bingo (first one found wins)
 	g.checkPhaseBingo()
+}
+
+// isBingoLineValid checks if a bingo line is still completely marked by the achiever
+// lineIndex: 0-4 = vertical columns, 5 = diagonal TL-BR, 6 = diagonal TR-BL
+func (g *Game) isBingoLineValid(lineIndex int, achiever PlayerColor) bool {
+	var positions [5][2]int
+
+	switch {
+	case lineIndex >= 0 && lineIndex < 5:
+		// Vertical line (column)
+		for i := 0; i < 5; i++ {
+			positions[i] = [2]int{i, lineIndex}
+		}
+	case lineIndex == 5:
+		// Diagonal top-left to bottom-right
+		for i := 0; i < 5; i++ {
+			positions[i] = [2]int{i, i}
+		}
+	case lineIndex == 6:
+		// Diagonal top-right to bottom-left
+		for i := 0; i < 5; i++ {
+			positions[i] = [2]int{i, 4 - i}
+		}
+	default:
+		return false
+	}
+
+	// Check all positions in the line
+	for _, pos := range positions {
+		cell := g.Board.Cells[pos[0]][pos[1]]
+		if cell.MarkedBy != achiever && cell.SecondMark != achiever {
+			return false
+		}
+	}
+	return true
 }

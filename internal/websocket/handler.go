@@ -6,6 +6,7 @@ import (
 	"bingosync/internal/user"
 	"bingosync/pkg/protocol"
 	"encoding/json"
+	"errors"
 	"log"
 	"sync"
 
@@ -294,15 +295,9 @@ func (h *Handler) handleSetRole(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 	
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-	
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 	
@@ -338,15 +333,9 @@ func (h *Handler) handleSetPassword(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 	
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-	
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 	
@@ -366,15 +355,9 @@ func (h *Handler) handleSetRule(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 	
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-	
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 	
@@ -414,15 +397,9 @@ func (h *Handler) handleSetRule(socket *gws.Conn, msg *protocol.Message) {
 
 // handleStartGame handles starting a game
 func (h *Handler) handleStartGame(socket *gws.Conn, msg *protocol.Message) {
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-	
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 	
@@ -442,15 +419,9 @@ func (h *Handler) handleMarkCell(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 	
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-	
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 	
@@ -471,15 +442,9 @@ func (h *Handler) handleUnmarkCell(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 
@@ -499,15 +464,9 @@ func (h *Handler) handleClearCellMark(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 
@@ -522,15 +481,9 @@ func (h *Handler) handleClearCellMark(socket *gws.Conn, msg *protocol.Message) {
 
 // handleResetGame handles resetting a game
 func (h *Handler) handleResetGame(socket *gws.Conn, msg *protocol.Message) {
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-	
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 	
@@ -550,19 +503,12 @@ func (h *Handler) handleSetCellText(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
-		return
-	}
-
-	var err error
 	if len(payload.Texts) > 0 {
 		// Batch set
 		err = r.SetAllCellTexts(msg.UserID, payload.Texts)
@@ -587,15 +533,9 @@ func (h *Handler) handleSettle(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 
-	u := h.userManager.GetUser(msg.UserID)
-	if u == nil || u.RoomID == "" {
-		h.sendError(socket, 404, "user not in room")
-		return
-	}
-
-	r := h.roomManager.GetRoom(u.RoomID)
-	if r == nil {
-		h.sendError(socket, 404, "room not found")
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
 		return
 	}
 
@@ -661,6 +601,22 @@ func (h *Handler) broadcastRoomState(r *room.Room) {
 func mustMarshal(v interface{}) json.RawMessage {
 	data, _ := json.Marshal(v)
 	return data
+}
+
+// getUserAndRoom validates and returns user and room for handlers that require both
+func (h *Handler) getUserAndRoom(userID string) (*user.User, *room.Room, error) {
+	u := h.userManager.GetUser(userID)
+	if u == nil {
+		return nil, nil, errors.New("user not found")
+	}
+	if u.RoomID == "" {
+		return nil, nil, errors.New("user not in room")
+	}
+	r := h.roomManager.GetRoom(u.RoomID)
+	if r == nil {
+		return nil, nil, errors.New("room not found")
+	}
+	return u, r, nil
 }
 
 func convertRooms(rooms []room.RoomInfo) []protocol.RoomPayload {
