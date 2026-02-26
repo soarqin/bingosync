@@ -49,6 +49,8 @@ export default {
     red: 'Red',
     blue: 'Blue',
     clear: 'Clear',
+    streamerMode: 'Streamer Mode',
+    exitStreamerMode: 'Exit Streamer Mode',
   },
   player: {
     spectator: 'Spectator',

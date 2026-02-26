@@ -1,10 +1,5 @@
 <template>
   <div class="bingo-board">
-    <!-- Bingo notification (floating) -->
-    <div v-if="game?.rule === 'phase' && game?.status === 'playing' && game.bingo_achiever && game.bingo_achiever !== 'none'" class="bingo-notification">
-      🎉 {{ game.bingo_achiever === 'red' ? t('game.redTeam') : t('game.blueTeam') }} {{ t('phase.bingoAchieved') }}! 🎉
-    </div>
-
     <div class="board" ref="boardRef">
       <div v-for="(row, rowIndex) in board.cells" :key="rowIndex" class="row">
         <div
@@ -43,34 +38,40 @@
 
     <!-- Game info section below board (always visible) -->
     <div v-if="game" class="game-info-section">
-      <!-- Scores (top priority) -->
+      <!-- Scores (top priority) - centered layout with names on sides, scores in middle -->
       <div class="scores-row">
-        <span class="red">{{ t('game.redScore') }}: {{ redCount }}</span>
-        <span class="blue">{{ t('game.blueScore') }}: {{ blueCount }}</span>
+        <div class="player-name-container left">
+          <span v-if="hasBingo('red')" class="bingo-badge">BINGO!</span>
+          <span class="player-name red-name">{{ redPlayerName }}</span>
+        </div>
+        <div class="scores-center">
+          <span class="red-score">{{ redCount }}</span>
+          <span class="score-separator">:</span>
+          <span class="blue-score">{{ blueCount }}</span>
+        </div>
+        <div class="player-name-container right">
+          <span class="player-name blue-name">{{ bluePlayerName }}</span>
+          <span v-if="hasBingo('blue')" class="bingo-badge">BINGO!</span>
+        </div>
       </div>
       
       <!-- Game status -->
       <div class="status-row">
         <span v-if="game.status === 'waiting'">{{ t('game.waiting') }}</span>
         <span v-else-if="game.status === 'playing'">{{ t('game.playing') }}</span>
-        <span v-else class="finished">{{ t('game.finished') }}</span>
-      </div>
-    </div>
-
-    <!-- Winner display -->
-    <div v-if="game?.status === 'finished' && game.winner" class="winner-display">
-      <div class="winner-title">
-        <span v-if="game.winner.winner === 'none'" class="tie">{{ t('game.draw') }}!</span>
-        <span v-else :class="game.winner.winner">
-          {{ game.winner.winner === 'red' ? t('game.redTeam') : t('game.blueTeam') }} {{ t('game.winner') }}!
+        <span v-else class="finished">
+          {{ t('game.finished') }}
+          <span v-if="game.winner" class="winner-inline">
+            - <span :class="game.winner.winner">{{ game.winner.winner === 'none' ? t('game.draw') : (game.winner.winner === 'red' ? t('game.redTeam') : t('game.blueTeam')) }}</span> {{ t('game.winner') }}!
+          </span>
         </span>
       </div>
-      <div class="winner-reason">
-        {{ winReasonText }}
-      </div>
-      <div class="winner-scores">
-        <span class="red">{{ t('game.redScore') }}: {{ game.winner.red_score }}</span>
-        <span class="blue">{{ t('game.blueScore') }}: {{ game.winner.blue_score }}</span>
+      
+      <!-- Winner notification for streamer mode -->
+      <div v-if="streamerMode && game.status === 'finished' && game.winner" class="streamer-winner">
+        <span :class="game.winner.winner" class="winner-text">
+          {{ game.winner.winner === 'none' ? t('game.draw') : (game.winner.winner === 'red' ? t('game.redTeam') : t('game.blueTeam')) }} {{ t('game.winner') }}!
+        </span>
       </div>
     </div>
   </div>
@@ -78,18 +79,18 @@
 
 <script setup lang="ts">
 import { ref, computed, watch, nextTick, inject, type Ref, onMounted, onUnmounted } from 'vue';
-import type { Game, Board, PlayerColor, WinReason } from '../types';
+import type { Game, Board, PlayerColor } from '../types';
 import { useGameStore } from '../stores/game';
 import { useWebSocket } from '../composables/useWebSocket';
 import { useLocaleStore } from '../stores/locale';
 
 // Cell size constants
 const BASE_CELL_SIZE = 80; // Base cell size in pixels
-const CELL_PADDING = 6; // Consistent with CSS padding
+const CELL_PADDING = 4; // Consistent with CSS padding
 const LINE_HEIGHT = 1.3;
 const MIN_FONT_SIZE = 7;
 const MAX_FONT_SIZE = 18;
-const SAFETY_FACTOR = 0.92; // Safety factor to prevent overflow due to estimation errors
+const SAFETY_FACTOR = 0.88; // Safety factor to prevent overflow due to estimation errors
 
 // Responsive cell size
 const cellSize = ref(BASE_CELL_SIZE);
@@ -98,6 +99,7 @@ const boardRef = ref<HTMLElement | null>(null);
 const props = defineProps<{
   board: Board;
   game: Game | null;
+  streamerMode?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -108,12 +110,6 @@ const emit = defineEmits<{
 const store = useGameStore();
 const { setCellText, setAllCellTexts, startGame, settle, clearCellMark } = useWebSocket();
 const { t } = useLocaleStore();
-
-// Inject selectedColor from parent (App.vue)
-const selectedColor = inject<Ref<PlayerColor>>('selectedColor');
-if (!selectedColor) {
-  console.error('selectedColor not provided from parent');
-}
 
 // Update cell size based on actual rendered cell
 function updateCellSize() {
@@ -202,6 +198,7 @@ function estimateTextWidth(text: string): number {
 }
 
 // Calculate the number of lines after text wrapping based on font size
+// Respects word boundaries for English text
 function calculateWrappedLines(text: string, fontSize: number, availableWidth: number): number {
   const explicitLines = text.split('\n');
   let totalLines = 0;
@@ -215,13 +212,73 @@ function calculateWrappedLines(text: string, fontSize: number, availableWidth: n
       continue;
     }
     
-    const lineWidth = estimateTextWidth(line);
-    // Calculate how many lines this segment needs (rounded up)
-    const wrappedLines = Math.ceil(lineWidth / maxLineWidth);
-    totalLines += Math.max(1, wrappedLines);
+    // Split line into words (keeping CJK characters as individual units)
+    const words = splitIntoWords(line);
+    let currentLineWidth = 0;
+    let lineCount = 1;
+    
+    for (const word of words) {
+      const wordWidth = estimateTextWidth(word);
+      
+      // If single word is wider than max width, it will be forced to break
+      if (wordWidth > maxLineWidth) {
+        // This word alone takes multiple lines
+        const wordLines = Math.ceil(wordWidth / maxLineWidth);
+        if (currentLineWidth > 0) {
+          lineCount += wordLines;
+        } else {
+          lineCount += wordLines - 1;
+        }
+        currentLineWidth = wordWidth % maxLineWidth;
+        if (currentLineWidth === 0) currentLineWidth = maxLineWidth;
+      } else if (currentLineWidth + wordWidth <= maxLineWidth) {
+        // Word fits on current line
+        currentLineWidth += wordWidth;
+      } else {
+        // Word needs to go to next line
+        lineCount++;
+        currentLineWidth = wordWidth;
+      }
+    }
+    
+    totalLines += Math.max(1, lineCount);
   }
   
   return totalLines;
+}
+
+// Split text into words, treating CJK characters as individual units
+// and grouping Latin words together
+function splitIntoWords(text: string): string[] {
+  const words: string[] = [];
+  let currentLatinWord = '';
+  
+  for (const char of text) {
+    const code = char.charCodeAt(0);
+    const isCJK = (code >= 0x4e00 && code <= 0x9fff) || // Chinese
+                  (code >= 0x3040 && code <= 0x30ff) || // Japanese
+                  (code >= 0xac00 && code <= 0xd7af) || // Korean
+                  (code >= 0xff00 && code <= 0xffef);   // Fullwidth
+    
+    if (isCJK) {
+      // CJK character - save any pending Latin word first, then add CJK as separate word
+      if (currentLatinWord) {
+        words.push(currentLatinWord);
+        currentLatinWord = '';
+      }
+      words.push(char);
+    } else {
+      // Non-CJK character (Latin, numbers, symbols) - add to current Latin word
+      currentLatinWord += char;
+    }
+  }
+  
+  // Don't forget the last Latin word if any
+  if (currentLatinWord) {
+    words.push(currentLatinWord);
+  }
+  
+  return words;
 }
 
 // Calculate the optimal font size for a cell (using binary search)
@@ -308,6 +365,21 @@ const redCount = computed(() => calculateScores().red);
 
 const blueCount = computed(() => calculateScores().blue);
 
+// Get player names for score display
+const redPlayerName = computed(() => {
+  return store.redPlayer?.name || t('game.redTeam');
+});
+
+const bluePlayerName = computed(() => {
+  return store.bluePlayer?.name || t('game.blueTeam');
+});
+
+// Check if a player has achieved bingo
+function hasBingo(color: 'red' | 'blue'): boolean {
+  if (!props.game) return false;
+  return props.game.bingo_achiever === color;
+}
+
 // Calculate scores for both players
 function calculateScores(): { red: number; blue: number } {
   // For phase rule, calculate actual score
@@ -362,23 +434,6 @@ function calculatePhaseScore(color: 'red' | 'blue'): number {
   
   return score;
 }
-
-const winReasonText = computed(() => {
-  if (!props.game?.winner) return '';
-  const reason: WinReason = props.game.winner.reason;
-  switch (reason) {
-    case 'bingo':
-      return t('winReason.bingo');
-    case 'full_board':
-      return t('winReason.fullBoard');
-    case 'blackout':
-      return t('winReason.blackout');
-    case 'phase':
-      return t('winReason.phase');
-    default:
-      return '';
-  }
-});
 
 // Phase rule: check if current player can settle
 const canSettle = computed(() => {
@@ -505,67 +560,54 @@ function handleClick(row: number, col: number) {
   
   const cell = props.board.cells[row][col];
   
-  // Referee mode
+  // Referee mode: left-click toggles red
   if (store.isReferee) {
-    // Use referee selected color
-    emit('mark', row, col, selectedColor?.value || 'none');
+    if (cell.marked_by === 'red') {
+      // Clear red mark
+      emit('mark', row, col, 'none');
+    } else {
+      // Mark red
+      emit('mark', row, col, 'red');
+    }
     return;
   }
   
-  // Player mode: can only mark own color
+  // Player mode: left-click toggles own color
   const playerColor = store.currentUser?.player_color;
   if (playerColor && playerColor !== 'none') {
-    // Normal rule: cannot mark already marked cell (unless canceling own color)
-    if (props.game?.rule === 'normal' && cell.marked_by !== 'none') {
-      // If marked by self, can cancel
-      if (cell.marked_by === playerColor) {
-        emit('mark', row, col, 'none');
-      }
-      return;
+    // Toggle own mark: if already marked by self, clear; otherwise mark
+    if (cell.marked_by === playerColor || cell.second_mark === playerColor) {
+      // Clear own mark
+      clearCellMark(row, col, playerColor);
+    } else {
+      // Mark with own color
+      emit('mark', row, col, playerColor);
     }
-    
-    // Blackout and phase rules: can mark if not already marked by this player
-    if (props.game?.rule === 'blackout' || props.game?.rule === 'phase') {
-      // If cell already has this player's mark, do nothing
-      if (cell.marked_by === playerColor || cell.second_mark === playerColor) {
-        return;
-      }
-    }
-    
-    emit('mark', row, col, playerColor);
   }
 }
 
-// Right-click handler to clear specific color
+// Right-click handler
 function handleRightClick(event: MouseEvent, row: number, col: number) {
   event.preventDefault();
   
   if (!canMark.value) return;
+  if (isLocked(row)) return;
   
   const cell = props.board.cells[row][col];
   
-  // Only for blackout and phase rules
-  if (props.game?.rule !== 'blackout' && props.game?.rule !== 'phase') {
-    return;
-  }
-  
-  // Referee can clear any color
+  // Referee mode: right-click toggles blue
   if (store.isReferee) {
-    // Clear the selected color
-    if (selectedColor?.value && selectedColor.value !== 'none') {
-      clearCellMark(row, col, selectedColor.value);
+    if (cell.marked_by === 'blue') {
+      // Clear blue mark
+      emit('mark', row, col, 'none');
+    } else {
+      // Mark blue
+      emit('mark', row, col, 'blue');
     }
     return;
   }
   
-  // Player can only clear their own color
-  const playerColor = store.currentUser?.player_color;
-  if (playerColor && playerColor !== 'none') {
-    // Check if this player has a mark on the cell
-    if (cell.marked_by === playerColor || cell.second_mark === playerColor) {
-      clearCellMark(row, col, playerColor);
-    }
-  }
+  // Player mode: right-click does nothing (all actions via left-click)
 }
 
 function saveEditText() {
@@ -691,73 +733,62 @@ function handleExport() {
   position: relative;
 }
 
-.bingo-notification {
-  position: absolute;
-  top: -60px;
-  left: 50%;
-  transform: translateX(-50%);
+/* Bingo badge displayed next to player name */
+.bingo-badge {
   background: linear-gradient(135deg, #f39c12, #e67e22);
   color: white;
-  padding: 12px 24px;
-  border-radius: 25px;
-  font-size: 18px;
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 11px;
   font-weight: bold;
-  box-shadow: 0 4px 20px rgba(243, 156, 18, 0.5);
-  animation: pulse 2s infinite;
-  z-index: 100;
   white-space: nowrap;
+  animation: badge-pulse 2s infinite;
 }
 
-@keyframes pulse {
+@keyframes badge-pulse {
   0%, 100% {
-    transform: translateX(-50%) scale(1);
+    transform: scale(1);
   }
   50% {
-    transform: translateX(-50%) scale(1.05);
+    transform: scale(1.1);
   }
 }
 
-.winner-display {
-  padding: 20px;
-  background: linear-gradient(135deg, var(--bg-tertiary) 0%, var(--bg-primary) 100%);
-  border-radius: 12px;
-  text-align: center;
-  min-width: 300px;
-  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+/* Winner inline display in status row */
+.winner-inline {
+  margin-left: 8px;
 }
 
-.winner-title {
-  font-size: 28px;
-  font-weight: bold;
-  margin-bottom: 10px;
-}
-
-.winner-title .red {
+.winner-inline .red {
   color: var(--red-color);
-  text-shadow: 0 0 10px rgba(231, 76, 60, 0.5);
 }
 
-.winner-title .blue {
+.winner-inline .blue {
   color: var(--blue-color);
-  text-shadow: 0 0 10px rgba(52, 152, 219, 0.5);
 }
 
-.winner-title .tie {
+/* Streamer mode winner notification */
+.streamer-winner {
+  margin-top: 10px;
+  text-align: center;
+}
+
+.streamer-winner .winner-text {
+  font-size: 24px;
+  font-weight: bold;
+  text-shadow: 0 0 20px rgba(255, 255, 255, 0.5);
+}
+
+.streamer-winner .red {
+  color: var(--red-color);
+}
+
+.streamer-winner .blue {
+  color: var(--blue-color);
+}
+
+.streamer-winner .none {
   color: var(--warning-color);
-  text-shadow: 0 0 10px rgba(243, 156, 18, 0.5);
-}
-
-.winner-reason {
-  font-size: 16px;
-  color: var(--text-muted);
-  margin-bottom: 15px;
-}
-
-.winner-scores {
-  display: flex;
-  justify-content: center;
-  gap: 30px;
-  font-size: 18px;
 }
 
 /* 编辑文字对话框 */
@@ -846,7 +877,7 @@ function handleExport() {
   /* Board size is limited by container width and available height */
   /* Use CSS custom property for max-height calculation */
   width: 100%;
-  max-width: min(600px, calc(100vh - 280px));
+  max-width: min(600px, calc(100vh - 340px));
   aspect-ratio: 1;
   flex-shrink: 1;
   flex-grow: 0;
@@ -865,9 +896,13 @@ function handleExport() {
   align-items: center;
   justify-content: center;
   position: relative;
-  padding: 6px;
+  padding: 4px;
   box-sizing: border-box;
   transition: transform 0.15s ease, background-color 0.15s ease;
+  min-height: 0;
+  min-width: 0;
+  overflow: hidden;
+  aspect-ratio: 1;
 }
 
 .cell.clickable {
@@ -883,11 +918,12 @@ function handleExport() {
 .cell-text {
   color: var(--cell-text);
   text-align: center;
-  word-break: break-all;
+  word-break: normal;
+  overflow-wrap: anywhere;
   line-height: 1.3;
   overflow: hidden;
   white-space: pre-wrap;
-  max-width: 100%;
+  width: 100%;
   max-height: 100%;
 }
 
@@ -975,25 +1011,80 @@ function handleExport() {
   background: var(--bg-tertiary);
   border-radius: 8px;
   width: 100%;
-  max-width: min(600px, calc(100vh - 280px));
+  max-width: min(600px, calc(100vh - 340px));
   box-sizing: border-box;
 }
 
+/* Centered layout: names on sides, scores in middle with colon centered */
 .scores-row {
   display: flex;
   justify-content: center;
-  gap: 30px;
+  align-items: center;
+  padding: 0 10px;
   font-size: 18px;
   font-weight: bold;
   margin-bottom: 8px;
 }
 
-.scores-row .red {
-  color: var(--red-color);
+.scores-row .player-name-container {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  gap: 8px;
 }
 
-.scores-row .blue {
+.scores-row .player-name-container.left {
+  justify-content: flex-end;
+  padding-right: 16px;
+}
+
+.scores-row .player-name-container.right {
+  justify-content: flex-start;
+  padding-left: 16px;
+}
+
+.scores-row .player-name {
+  font-size: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100px;
+}
+
+.scores-row .red-name {
+  color: var(--red-color);
+  text-align: right;
+}
+
+.scores-row .blue-name {
   color: var(--blue-color);
+  text-align: left;
+}
+
+.scores-row .scores-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  font-size: 24px;
+  flex-shrink: 0;
+}
+
+.scores-row .red-score {
+  color: var(--red-color);
+  min-width: 36px;
+  text-align: right;
+}
+
+.scores-row .blue-score {
+  color: var(--blue-color);
+  min-width: 36px;
+  text-align: left;
+}
+
+.scores-row .score-separator {
+  color: var(--text-primary);
 }
 
 .status-row {

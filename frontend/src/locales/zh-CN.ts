@@ -49,6 +49,8 @@ export default {
     red: '红',
     blue: '蓝',
     clear: '清除',
+    streamerMode: '直播模式',
+    exitStreamerMode: '退出直播模式',
   },
   player: {
     spectator: '观众',

@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { ref, onMounted, computed, watch, provide } from 'vue';
+import { ref, onMounted, computed, watch } from 'vue';
 import BingoBoard from './components/BingoBoard.vue';
 import RoomList from './components/RoomList.vue';
 import RoomSettings from './components/RoomSettings.vue';
@@ -32,8 +32,23 @@ const { t } = localeStore;
 
 const serverUrl = ref('ws://localhost:8765/ws');
 const playerName = ref('');
-const selectedColor = ref<PlayerColor>('none');
 const bingoBoardRef = ref<InstanceType<typeof BingoBoard> | null>(null);
+
+// Streamer mode state
+const streamerMode = ref(false);
+
+// Initialize streamer mode from localStorage
+onMounted(() => {
+  const savedMode = localStorage.getItem('bingosync-streamer-mode');
+  if (savedMode !== null) {
+    streamerMode.value = savedMode === 'true';
+  }
+});
+
+// Persist streamer mode to localStorage
+watch(streamerMode, (value) => {
+  localStorage.setItem('bingosync-streamer-mode', String(value));
+});
 
 const connected = computed(() => store.connected);
 const connecting = computed(() => store.connecting);
@@ -93,8 +108,7 @@ const canBlueSettle = computed(() => {
   return (game.value.blue_row_marks?.[4] ?? 0) >= 2;
 });
 
-// Provide selectedColor to child components (BingoBoard)
-provide('selectedColor', selectedColor);
+
 
 async function handleConnect() {
   if (connected.value) {
@@ -302,8 +316,8 @@ onMounted(() => {
 
 <template>
   <div id="app">
-    <!-- Header -->
-    <header class="header">
+    <!-- Header (hidden in streamer mode) -->
+    <header v-if="!streamerMode" class="header">
       <div class="header-left">
         <h1>BingoSync</h1>
       </div>
@@ -367,10 +381,11 @@ onMounted(() => {
 
       <!-- Game room view -->
       <template v-else>
-        <div class="room-header">
-          <h2>{{ currentRoom?.name }}</h2>
+        <div v-if="!streamerMode" class="room-header">
+          <!-- Left spacer to balance layout -->
+          <div class="header-spacer"></div>
           
-          <!-- Board controls in header center -->
+          <!-- Board controls - centered relative to board -->
           <div class="board-controls-header">
             <!-- Import/Export buttons (owner only, waiting status) -->
             <template v-if="store.isOwner && game?.status === 'waiting'">
@@ -402,51 +417,49 @@ onMounted(() => {
           </div>
           
           <div class="room-actions">
+            <!-- Streamer mode toggle button -->
+            <button 
+              @click="streamerMode = !streamerMode" 
+              class="control-btn streamer-btn"
+              :class="{ active: streamerMode }"
+              :title="streamerMode ? t('game.exitStreamerMode') : t('game.streamerMode')"
+            >
+              📺 {{ streamerMode ? t('game.exitStreamerMode') : t('game.streamerMode') }}
+            </button>
             <!-- Room settings button -->
             <RoomSettings :game="game" />
             <button @click="handleLeaveRoom" class="leave-btn">{{ t('room.leaveRoom') }}</button>
           </div>
         </div>
         
-        <div class="game-container">
+        <div class="game-container" :class="{ 'streamer-container': streamerMode }">
+          <!-- Streamer mode exit button -->
+          <button 
+            v-if="streamerMode" 
+            @click="streamerMode = false"
+            class="streamer-exit-btn"
+            :title="t('game.exitStreamerMode')"
+          >
+            ✕ {{ t('game.exitStreamerMode') }}
+          </button>
           <div class="left-panel">
+            <h2 class="room-name-above-board">{{ currentRoom?.name }}</h2>
             <BingoBoard
               v-if="game?.board" 
               ref="bingoBoardRef"
               :board="game.board" 
               :game="game"
+              :streamer-mode="streamerMode"
               @mark="handleMark"
               @settle="handleSettle"
             />
           </div>
           
-          <div class="right-panel">
+          <div v-if="!streamerMode" class="right-panel">
             <PlayerPanel :game="game" />
             
             <!-- Control buttons section -->
             <div class="control-section">
-              <!-- Referee color picker -->
-              <div v-if="store.isReferee && (game?.status === 'playing' || game?.status === 'finished')" class="color-picker">
-                <span>{{ t('game.selectColor') }}:</span>
-                <div class="color-buttons">
-                  <button 
-                    class="color-btn red" 
-                    :class="{ active: selectedColor === 'red' }"
-                    @click="selectedColor = 'red'"
-                  >{{ t('game.red') }}</button>
-                  <button 
-                    class="color-btn blue" 
-                    :class="{ active: selectedColor === 'blue' }"
-                    @click="selectedColor = 'blue'"
-                  >{{ t('game.blue') }}</button>
-                  <button 
-                    class="color-btn clear" 
-                    :class="{ active: selectedColor === 'none' }"
-                    @click="selectedColor = 'none'"
-                  >{{ t('game.clear') }}</button>
-                </div>
-              </div>
-              
               <!-- Settlement buttons for phase rule -->
               <template v-if="game?.rule === 'phase' && game?.status === 'playing'">
                 <!-- For players -->
@@ -709,6 +722,7 @@ body {
   padding: 20px;
   overflow-y: auto;
   overflow-x: hidden;
+  box-sizing: border-box;
 }
 
 .disconnected {
@@ -725,21 +739,38 @@ body {
   justify-content: space-between;
   align-items: center;
   margin-bottom: 20px;
+  gap: 20px;
   position: relative;
 }
 
 .room-header h2 {
   font-size: 20px;
+  flex-shrink: 0;
+}
+
+/* Left spacer to balance room-actions in flex layout */
+.header-spacer {
+  flex-shrink: 0;
+  width: 350px;
 }
 
 .room-actions {
   display: flex;
-  gap: 10px;
   align-items: center;
+  flex-shrink: 0;
+  width: 350px;
+  justify-content: space-between;
 }
 
-.room-actions button {
+.room-actions > button,
+.room-actions > div,
+.room-actions > ::v-deep(button) {
+  flex: 1;
   padding: 8px 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .leave-btn {
@@ -755,7 +786,9 @@ body {
   gap: 20px;
   overflow: hidden;
   width: 100%;
+  min-width: 0;
   box-sizing: border-box;
+  position: relative;
 }
 
 .left-panel {
@@ -768,13 +801,30 @@ body {
   overflow: hidden;
 }
 
+.room-name-above-board {
+  text-align: center;
+  margin: 0 0 15px 0;
+  font-size: 24px;
+  font-weight: bold;
+  color: var(--text-primary);
+  line-height: 1.2;
+}
+
+/* Board controls in header - positioned to align with left-panel, centered like board */
 .board-controls-header {
   position: absolute;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 0;
+  right: calc(350px + 20px);
+  top: 50%;
+  transform: translateY(-50%);
   display: flex;
   justify-content: center;
   gap: 10px;
+  pointer-events: none;
+}
+
+.board-controls-header > * {
+  pointer-events: auto;
 }
 
 .board-controls-header .control-btn {
@@ -818,10 +868,12 @@ body {
 }
 
 .right-panel {
-  width: 300px;
+  width: 350px;
+  flex-shrink: 0;
   display: flex;
   flex-direction: column;
   gap: 15px;
+  box-sizing: border-box;
 }
 
 .control-section {
@@ -867,56 +919,47 @@ body {
   font-weight: bold;
 }
 
-.color-picker {
+/* Streamer mode styles */
+.streamer-container {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
-  background: var(--bg-primary);
-  border-radius: 6px;
+  justify-content: center;
+  align-items: center;
+  padding: 20px;
+  position: relative;
 }
 
-.color-picker span {
-  color: var(--text-secondary);
-  font-size: 14px;
-  font-weight: bold;
-}
-
-.color-buttons {
-  display: flex;
-  gap: 8px;
-}
-
-.color-btn {
-  flex: 1;
-  padding: 8px 12px;
-  border: 2px solid transparent;
+.streamer-exit-btn {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 100;
+  background: var(--bg-secondary);
+  border: 2px solid var(--border-light);
+  padding: 8px 16px;
   border-radius: 4px;
   cursor: pointer;
-  font-weight: bold;
+  font-size: 14px;
   transition: all 0.2s;
-  font-size: 13px;
 }
 
-.color-btn.red {
-  background: var(--red-color);
-  color: white;
+.streamer-exit-btn:hover {
+  background: var(--accent-color);
 }
 
-.color-btn.blue {
-  background: var(--blue-color);
-  color: white;
+.streamer-btn {
+  background: var(--bg-tertiary);
+  border: 2px solid transparent;
+  transition: all 0.2s;
 }
 
-.color-btn.clear {
-  background: var(--clear-btn-bg);
-  color: white;
+.streamer-btn:hover {
+  background: var(--bg-quaternary);
+  border-color: var(--accent-color);
 }
 
-.color-btn.active {
-  border-color: var(--warning-color);
-  transform: scale(1.05);
-  box-shadow: 0 0 10px rgba(243, 156, 18, 0.5);
+.streamer-btn.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
 }
 
 /* Settlement buttons */
