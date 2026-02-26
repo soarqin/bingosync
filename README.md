@@ -11,6 +11,7 @@ Bingo board sync tool built with Go + Wails (Vue.js + TypeScript for frontend).
 - **Multi-language** - Supports Chinese (zh-CN) and English (en-US)
 - **Theme Support** - Light and dark themes
 - **Import/Export** - Import/export board text via CSV or TXT files
+- **Streamer Mode** - Clean interface optimized for OBS/streaming
 
 ## Tech Stack
 
@@ -77,6 +78,7 @@ Then connect to `ws://localhost:8765/ws` from the frontend.
 5. **Start Game** - Start the game when everyone is ready
 6. **Mark Cells** - Players mark cells, Referee can mark/unmark any cell
 7. **Win** - First to complete a line (Normal), full board (Blackout), or score-based (Phase)
+8. **Streamer Mode** - Toggle streamer mode for a clean broadcast interface
 
 ## Game Rules
 
@@ -90,9 +92,12 @@ Then connect to `ws://localhost:8765/ws` from the frontend.
 - First to complete the entire board wins
 
 ### Phase
-- Rows unlock progressively
-- Each row has a mark limit per player
-- Score-based winning with phase configuration
+- 5x5 board with 5 phases (rows), each with different point values
+- Each phase allows both players to complete cells (first player gets full points, second gets reduced points)
+- Players unlock the next phase after completing enough cells in the current phase
+- First player to achieve a Bingo (5 vertical lines or 2 diagonals) gets bonus points
+- After completing phase 5, players can trigger settlement to end the game
+- Player with highest score wins; ties are resolved by who settled first
 
 ## Development
 

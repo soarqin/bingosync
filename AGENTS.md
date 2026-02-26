@@ -12,6 +12,7 @@ BingoSync is a real-time multiplayer Bingo game built with Go (backend) and Vue.
 - Multi-language support (zh-CN, en-US)
 - Light/Dark theme support
 - CSV import/export for board text
+- Streamer mode for OBS/broadcast
 
 ## Project Standards
 
@@ -51,7 +52,7 @@ Examples:
 ## Tech Stack
 
 ### Backend
-- **Go 1.23**
+- **Go 1.24**
 - **Wails v2** - Desktop application framework
 - **gws** - WebSocket library for real-time communication
 
@@ -328,6 +329,8 @@ go run ./cmd/server
 | `set_cell_text` | Set cell text | `{ row, col, text }` |
 | `set_rule` | Set game rule | `{ rule }` |
 | `set_password` | Set room password | `{ password }` |
+| `clear_cell_mark` | Clear specific mark color | `{ row, col, color }` |
+| `settle` | Settle game (phase rule) | `{ player }` |
 
 ### Server → Client Messages
 
@@ -376,4 +379,5 @@ spectators: User[]
    - `bingosync-locale`
    - `bingosync-player-name`
    - `bingosync-server-url`
+   - `bingosync-streamer-mode`
 
