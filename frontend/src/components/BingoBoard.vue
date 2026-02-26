@@ -62,16 +62,14 @@
         <span v-else class="finished">
           {{ t('game.finished') }}
           <span v-if="game.winner" class="winner-inline">
-            - <span :class="game.winner.winner">{{ game.winner.winner === 'none' ? t('game.draw') : (game.winner.winner === 'red' ? t('game.redTeam') : t('game.blueTeam')) }}</span> {{ t('game.winner') }}!
+            - <span :class="game.winner.winner">{{ winnerText }}</span> {{ t('game.winner') }}!
           </span>
         </span>
       </div>
       
       <!-- Winner notification for streamer mode -->
       <div v-if="streamerMode && game.status === 'finished' && game.winner" class="streamer-winner">
-        <span :class="game.winner.winner" class="winner-text">
-          {{ game.winner.winner === 'none' ? t('game.draw') : (game.winner.winner === 'red' ? t('game.redTeam') : t('game.blueTeam')) }} {{ t('game.winner') }}!
-        </span>
+        <span :class="game.winner.winner" class="winner-text">{{ winnerText }} {{ t('game.winner') }}!</span>
       </div>
     </div>
   </div>
@@ -376,9 +374,15 @@ const bluePlayerName = computed(() => {
 
 // Check if a player has achieved bingo
 function hasBingo(color: 'red' | 'blue'): boolean {
-  if (!props.game) return false;
-  return props.game.bingo_achiever === color;
+  return props.game?.bingo_achiever === color;
 }
+
+// Winner display text
+const winnerText = computed(() => {
+  if (!props.game?.winner) return '';
+  const w = props.game.winner.winner;
+  return w === 'none' ? t('game.draw') : (w === 'red' ? t('game.redTeam') : t('game.blueTeam'));
+});
 
 // Calculate scores for both players
 function calculateScores(): { red: number; blue: number } {
@@ -930,15 +934,6 @@ function handleExport() {
 .cell.red .cell-text,
 .cell.blue .cell-text {
   color: var(--text-on-accent);
-}
-
-.cell.clickable {
-  cursor: pointer;
-}
-
-.cell.clickable:hover {
-  transform: scale(1.05);
-  box-shadow: 0 0 10px rgba(0, 0, 0, 0.3);
 }
 
 .cell.can-edit {

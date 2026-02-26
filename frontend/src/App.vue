@@ -743,11 +743,6 @@ body {
   position: relative;
 }
 
-.room-header h2 {
-  font-size: 20px;
-  flex-shrink: 0;
-}
-
 /* Left spacer to balance room-actions in flex layout */
 .header-spacer {
   flex-shrink: 0;
