@@ -308,6 +308,9 @@ wails build
 
 # Run standalone server
 go run ./cmd/server
+
+# Run standalone server with custom options
+go run ./cmd/server --port 8765 --data ./data --room-ttl 30m
 ```
 
 ## WebSocket Protocol

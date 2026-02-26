@@ -7,28 +7,30 @@ import (
 	"encoding/hex"
 	"errors"
 	"sync"
+	"time"
 )
 
 var (
-	ErrRoomNotFound      = errors.New("room not found")
-	ErrRoomFull          = errors.New("room is full")
-	ErrWrongPassword     = errors.New("wrong password")
-	ErrNotOwner          = errors.New("only room owner can do this")
-	ErrGameInProgress    = errors.New("game in progress")
-	ErrUserNotFound      = errors.New("user not found")
-	ErrPlayerAlreadySet  = errors.New("player already set for this color")
+	ErrRoomNotFound     = errors.New("room not found")
+	ErrRoomFull         = errors.New("room is full")
+	ErrWrongPassword    = errors.New("wrong password")
+	ErrNotOwner         = errors.New("only room owner can do this")
+	ErrGameInProgress   = errors.New("game in progress")
+	ErrUserNotFound     = errors.New("user not found")
+	ErrPlayerAlreadySet = errors.New("player already set for this color")
 )
 
 // Room represents a game room
 type Room struct {
-	mu          sync.RWMutex
-	ID          string
-	Name        string
-	Password    string
-	OwnerID     string
-	Game        *game.Game
-	Users       map[string]*user.User
-	UserOrder   []string // Order of users for reference
+	mu         sync.RWMutex
+	ID         string
+	Name       string
+	Password   string
+	OwnerID    string
+	Game       *game.Game
+	Users      map[string]*user.User
+	UserOrder  []string // Order of users for reference
+	emptyTimer *time.Timer
 }
 
 // NewRoom creates a new room
@@ -48,23 +50,29 @@ func NewRoom(id, name, password, ownerID string) *Room {
 func (r *Room) AddUser(u *user.User) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	if _, exists := r.Users[u.ID]; exists {
 		return nil // Already in room
 	}
-	
+
+	// Stop empty room timer if running
+	if r.emptyTimer != nil {
+		r.emptyTimer.Stop()
+		r.emptyTimer = nil
+	}
+
 	u.RoomID = r.ID
 	u.Role = user.RoleSpectator
 	u.PlayerColor = user.ColorNone
 	r.Users[u.ID] = u
 	r.UserOrder = append(r.UserOrder, u.ID)
-	
+
 	// First user becomes owner and referee
 	if r.OwnerID == "" {
 		r.OwnerID = u.ID
 		u.Role = user.RoleReferee
 	}
-	
+
 	return nil
 }
 
@@ -72,13 +80,13 @@ func (r *Room) AddUser(u *user.User) error {
 func (r *Room) RemoveUser(userID string) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	if u, exists := r.Users[userID]; exists {
 		u.RoomID = ""
 		u.Role = user.RoleSpectator
 		u.PlayerColor = user.ColorNone
 		delete(r.Users, userID)
-		
+
 		// Remove from order
 		for i, id := range r.UserOrder {
 			if id == userID {
@@ -86,7 +94,7 @@ func (r *Room) RemoveUser(userID string) {
 				break
 			}
 		}
-		
+
 		// Transfer ownership if owner left
 		if r.OwnerID == userID && len(r.UserOrder) > 0 {
 			r.OwnerID = r.UserOrder[0]
@@ -120,14 +128,14 @@ func (r *Room) SetUserRole(callerID, targetUserID string, role user.UserRole, co
 			}
 		}
 	}
-	
+
 	targetUser.Role = role
 	if role == user.RolePlayer {
 		targetUser.PlayerColor = color
 	} else {
 		targetUser.PlayerColor = user.ColorNone
 	}
-	
+
 	return nil
 }
 
@@ -135,11 +143,11 @@ func (r *Room) SetUserRole(callerID, targetUserID string, role user.UserRole, co
 func (r *Room) SetPassword(callerID, password string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	if r.OwnerID != callerID {
 		return ErrNotOwner
 	}
-	
+
 	r.Password = password
 	return nil
 }
@@ -148,7 +156,7 @@ func (r *Room) SetPassword(callerID, password string) error {
 func (r *Room) ValidatePassword(password string) bool {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	if r.Password == "" {
 		return true
 	}
@@ -166,15 +174,15 @@ func (r *Room) HasPassword() bool {
 func (r *Room) SetGameRule(callerID string, rule game.GameRule, config game.PhaseConfig) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	if r.OwnerID != callerID {
 		return ErrNotOwner
 	}
-	
+
 	if r.Game.Status == game.StatusPlaying {
 		return ErrGameInProgress
 	}
-	
+
 	r.Game = game.NewGame(rule)
 	r.Game.PhaseConfig = config
 	return nil
@@ -184,11 +192,11 @@ func (r *Room) SetGameRule(callerID string, rule game.GameRule, config game.Phas
 func (r *Room) StartGame(callerID string) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	
+
 	if r.OwnerID != callerID {
 		return ErrNotOwner
 	}
-	
+
 	return r.Game.Start()
 }
 
@@ -342,7 +350,7 @@ func (r *Room) Settle(callerID string, playerColor game.PlayerColor) error {
 func (r *Room) GetState() *RoomState {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
-	
+
 	users := make([]UserInfo, 0, len(r.Users))
 	for _, u := range r.Users {
 		users = append(users, UserInfo{
@@ -352,14 +360,14 @@ func (r *Room) GetState() *RoomState {
 			PlayerColor: u.PlayerColor.String(),
 		})
 	}
-	
+
 	return &RoomState{
-		ID:         r.ID,
-		Name:       r.Name,
-		OwnerID:    r.OwnerID,
+		ID:          r.ID,
+		Name:        r.Name,
+		OwnerID:     r.OwnerID,
 		HasPassword: r.Password != "",
-		Game:       r.Game,
-		Users:      users,
+		Game:        r.Game,
+		Users:       users,
 	}
 }
 
@@ -373,24 +381,48 @@ type UserInfo struct {
 
 // RoomState represents the full room state
 type RoomState struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	OwnerID     string       `json:"owner_id"`
-	HasPassword bool         `json:"has_password"`
-	Game        *game.Game   `json:"game"`
-	Users       []UserInfo   `json:"users"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	OwnerID     string     `json:"owner_id"`
+	HasPassword bool       `json:"has_password"`
+	Game        *game.Game `json:"game"`
+	Users       []UserInfo `json:"users"`
+}
+
+// PersistData represents data for persistence (no users)
+type PersistData struct {
+	ID       string     `json:"id"`
+	Name     string     `json:"name"`
+	Password string     `json:"password"`
+	Game     *game.Game `json:"game"`
+}
+
+// GetPersistData returns data for persistence
+func (r *Room) GetPersistData() *PersistData {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return &PersistData{
+		ID:       r.ID,
+		Name:     r.Name,
+		Password: r.Password,
+		Game:     r.Game,
+	}
 }
 
 // Manager manages all rooms
 type Manager struct {
-	mu    sync.RWMutex
-	rooms map[string]*Room
+	mu       sync.RWMutex
+	rooms    map[string]*Room
+	emptyTTL time.Duration
+	onDelete func(id string, immediate bool)
 }
 
 // NewManager creates a new room manager
-func NewManager() *Manager {
+func NewManager(emptyTTL time.Duration, onDelete func(string, bool)) *Manager {
 	return &Manager{
-		rooms: make(map[string]*Room),
+		rooms:    make(map[string]*Room),
+		emptyTTL: emptyTTL,
+		onDelete: onDelete,
 	}
 }
 
@@ -398,7 +430,7 @@ func NewManager() *Manager {
 func (m *Manager) CreateRoom(name, password, ownerID string) *Room {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	
+
 	id := generateRoomID()
 	room := NewRoom(id, name, password, ownerID)
 	m.rooms[id] = room
@@ -423,7 +455,7 @@ func (m *Manager) DeleteRoom(id string) {
 func (m *Manager) ListRooms() []RoomInfo {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	rooms := make([]RoomInfo, 0, len(m.rooms))
 	for _, r := range m.rooms {
 		r.mu.RLock()
@@ -457,4 +489,107 @@ func generateRoomID() string {
 	b := make([]byte, 4)
 	rand.Read(b)
 	return hex.EncodeToString(b)
+}
+
+// RestoreRoom creates a room from persisted data
+func RestoreRoom(id, name, password string, g *game.Game) *Room {
+	return &Room{
+		ID:        id,
+		Name:      name,
+		Password:  password,
+		OwnerID:   "",
+		Game:      g,
+		Users:     make(map[string]*user.User),
+		UserOrder: []string{},
+	}
+}
+
+// AddRoom adds an existing room to the manager (for restore)
+func (m *Manager) AddRoom(r *Room) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rooms[r.ID] = r
+}
+
+// IsEmpty returns whether the room has no users
+func (r *Room) IsEmpty() bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return len(r.Users) == 0
+}
+
+// GetGameStatus returns the game status
+func (r *Room) GetGameStatus() game.GameStatus {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.Game.Status
+}
+
+// ScheduleDeleteIfEmpty schedules room deletion if empty
+// Returns true if room was immediately deleted
+func (m *Manager) ScheduleDeleteIfEmpty(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	r, exists := m.rooms[id]
+	if !exists {
+		return false
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(r.Users) > 0 {
+		return false
+	}
+
+	// Game finished - delete immediately
+	if r.Game.Status == game.StatusFinished {
+		delete(m.rooms, id)
+		if m.onDelete != nil {
+			m.onDelete(id, true)
+		}
+		return true
+	}
+
+	// Game not finished - schedule delayed deletion
+	if r.emptyTimer == nil {
+		r.emptyTimer = time.AfterFunc(m.emptyTTL, func() {
+			m.deleteIfEmpty(id)
+		})
+	}
+
+	return false
+}
+
+// deleteIfEmpty deletes the room if still empty (called by timer)
+func (m *Manager) deleteIfEmpty(id string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	r, exists := m.rooms[id]
+	if !exists {
+		return
+	}
+
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
+	if len(r.Users) == 0 {
+		r.emptyTimer = nil
+		delete(m.rooms, id)
+		if m.onDelete != nil {
+			m.onDelete(id, false)
+		}
+	}
+}
+
+// CancelDeletionTimer cancels the room's deletion timer if exists
+func (r *Room) CancelDeletionTimer() {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.emptyTimer != nil {
+		r.emptyTimer.Stop()
+		r.emptyTimer = nil
+	}
 }

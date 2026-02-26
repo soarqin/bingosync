@@ -54,3 +54,4 @@ coverage.txt
 tmp/
 temp/
 *.tmp
+/data/

@@ -3,12 +3,14 @@ package websocket
 import (
 	"bingosync/internal/game"
 	"bingosync/internal/room"
+	"bingosync/internal/storage"
 	"bingosync/internal/user"
 	"bingosync/pkg/protocol"
 	"encoding/json"
 	"errors"
 	"log"
 	"sync"
+	"time"
 
 	"github.com/lxzan/gws"
 )
@@ -17,15 +19,29 @@ import (
 type Handler struct {
 	userManager *user.Manager
 	roomManager *room.Manager
+	storage     *storage.Storage
 	connections sync.Map // userID -> *gws.Conn
 }
 
 // NewHandler creates a new WebSocket handler
-func NewHandler() *Handler {
-	return &Handler{
+func NewHandler(store *storage.Storage, emptyTTL time.Duration) *Handler {
+	h := &Handler{
 		userManager: user.NewManager(),
-		roomManager: room.NewManager(),
+		storage:     store,
 	}
+
+	h.roomManager = room.NewManager(emptyTTL, func(id string, immediate bool) {
+		if store != nil {
+			store.DeleteRoom(id)
+		}
+	})
+
+	// Load persisted rooms
+	if store != nil {
+		h.loadRoomsFromStorage()
+	}
+
+	return h
 }
 
 // OnOpen handles new connections
@@ -34,10 +50,10 @@ func (h *Handler) OnOpen(socket *gws.Conn) {
 	u := user.NewUser("Player")
 	h.userManager.AddUser(u)
 	h.connections.Store(u.ID, socket)
-	
+
 	// Store user ID in socket session
 	socket.Session().Store("userID", u.ID)
-	
+
 	// Send welcome message with user ID
 	h.sendToSocket(socket, protocol.Message{
 		Type:   "connected",
@@ -64,12 +80,8 @@ func (h *Handler) OnClose(socket *gws.Conn, err error) {
 		r := h.roomManager.GetRoom(u.RoomID)
 		if r != nil {
 			r.RemoveUser(uid)
-			// Delete room if empty
-			if len(r.Users) == 0 {
-				h.roomManager.DeleteRoom(r.ID)
-			} else {
-				h.broadcastRoomState(r)
-			}
+			h.roomManager.ScheduleDeleteIfEmpty(r.ID)
+			h.broadcastRoomState(r)
 		}
 	}
 
@@ -81,20 +93,20 @@ func (h *Handler) OnClose(socket *gws.Conn, err error) {
 // OnMessage handles incoming messages
 func (h *Handler) OnMessage(socket *gws.Conn, message *gws.Message) {
 	defer message.Close()
-	
+
 	userID, _ := socket.Session().Load("userID")
 	if userID == nil {
 		return
 	}
-	
+
 	var msg protocol.Message
 	if err := json.Unmarshal(message.Bytes(), &msg); err != nil {
 		h.sendError(socket, 400, "invalid message format")
 		return
 	}
-	
+
 	msg.UserID = userID.(string)
-	
+
 	switch msg.Type {
 	case protocol.MsgSetName:
 		h.handleSetName(socket, &msg)
@@ -182,24 +194,26 @@ func (h *Handler) handleCreateRoom(socket *gws.Conn, msg *protocol.Message) {
 		h.sendError(socket, 400, "invalid payload")
 		return
 	}
-	
+
 	u := h.userManager.GetUser(msg.UserID)
 	if u == nil {
 		h.sendError(socket, 404, "user not found")
 		return
 	}
-	
+
 	// Leave current room if in one
 	if u.RoomID != "" {
 		oldRoom := h.roomManager.GetRoom(u.RoomID)
 		if oldRoom != nil {
 			oldRoom.RemoveUser(msg.UserID)
+			h.roomManager.ScheduleDeleteIfEmpty(oldRoom.ID)
 		}
 	}
-	
+
 	r := h.roomManager.CreateRoom(payload.Name, payload.Password, msg.UserID)
 	r.AddUser(u)
-	
+	h.saveRoomState(r)
+
 	// Send state update in correct format
 	state := r.GetState()
 	h.sendToSocket(socket, protocol.Message{
@@ -226,34 +240,35 @@ func (h *Handler) handleJoinRoom(socket *gws.Conn, msg *protocol.Message) {
 		h.sendError(socket, 400, "invalid payload")
 		return
 	}
-	
+
 	u := h.userManager.GetUser(msg.UserID)
 	if u == nil {
 		h.sendError(socket, 404, "user not found")
 		return
 	}
-	
+
 	r := h.roomManager.GetRoom(payload.RoomID)
 	if r == nil {
 		h.sendError(socket, 404, "room not found")
 		return
 	}
-	
+
 	if !r.ValidatePassword(payload.Password) {
 		h.sendError(socket, 403, "wrong password")
 		return
 	}
-	
+
 	// Leave current room if in one
 	if u.RoomID != "" && u.RoomID != payload.RoomID {
 		oldRoom := h.roomManager.GetRoom(u.RoomID)
 		if oldRoom != nil {
 			oldRoom.RemoveUser(msg.UserID)
+			h.roomManager.ScheduleDeleteIfEmpty(oldRoom.ID)
 		}
 	}
-	
+
 	r.AddUser(u)
-	
+
 	// Broadcast to room
 	h.broadcastRoomState(r)
 }
@@ -264,21 +279,16 @@ func (h *Handler) handleLeaveRoom(socket *gws.Conn, msg *protocol.Message) {
 	if u == nil || u.RoomID == "" {
 		return
 	}
-	
+
 	r := h.roomManager.GetRoom(u.RoomID)
 	if r == nil {
 		return
 	}
-	
+
 	r.RemoveUser(msg.UserID)
-	
-	// Delete room if empty
-	if len(r.Users) == 0 {
-		h.roomManager.DeleteRoom(r.ID)
-	} else {
-		h.broadcastRoomState(r)
-	}
-	
+	h.roomManager.ScheduleDeleteIfEmpty(r.ID)
+	h.broadcastRoomState(r)
+
 	h.sendToSocket(socket, protocol.Message{
 		Type: protocol.MsgLeft,
 		Payload: mustMarshal(map[string]string{
@@ -294,22 +304,23 @@ func (h *Handler) handleSetRole(socket *gws.Conn, msg *protocol.Message) {
 		h.sendError(socket, 400, "invalid payload")
 		return
 	}
-	
+
 	_, r, err := h.getUserAndRoom(msg.UserID)
 	if err != nil {
 		h.sendError(socket, 404, err.Error())
 		return
 	}
-	
+
 	role := user.UserRoleFromString(payload.Role)
 	color := user.PlayerColorFromString(payload.PlayerColor)
-	
+
 	if err := r.SetUserRole(msg.UserID, payload.TargetUserID, role, color); err != nil {
 		h.sendError(socket, 403, err.Error())
 		return
 	}
-	
+
 	h.broadcastRoomState(r)
+	// No need to save - user roles are not persisted
 }
 
 // handleListRooms handles listing rooms
@@ -332,19 +343,20 @@ func (h *Handler) handleSetPassword(socket *gws.Conn, msg *protocol.Message) {
 		h.sendError(socket, 400, "invalid payload")
 		return
 	}
-	
+
 	_, r, err := h.getUserAndRoom(msg.UserID)
 	if err != nil {
 		h.sendError(socket, 404, err.Error())
 		return
 	}
-	
+
 	if err := r.SetPassword(msg.UserID, payload.Password); err != nil {
 		h.sendError(socket, 403, err.Error())
 		return
 	}
-	
+
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // handleSetRule handles setting game rule
@@ -354,13 +366,13 @@ func (h *Handler) handleSetRule(socket *gws.Conn, msg *protocol.Message) {
 		h.sendError(socket, 400, "invalid payload")
 		return
 	}
-	
+
 	_, r, err := h.getUserAndRoom(msg.UserID)
 	if err != nil {
 		h.sendError(socket, 404, err.Error())
 		return
 	}
-	
+
 	rule := game.GameRuleFromString(payload.Rule)
 	config := game.DefaultPhaseConfig()
 
@@ -386,13 +398,14 @@ func (h *Handler) handleSetRule(socket *gws.Conn, msg *protocol.Message) {
 	if payload.PhaseConfig.FinalBonus > 0 {
 		config.FinalBonus = payload.PhaseConfig.FinalBonus
 	}
-	
+
 	if err := r.SetGameRule(msg.UserID, rule, config); err != nil {
 		h.sendError(socket, 403, err.Error())
 		return
 	}
-	
+
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // handleStartGame handles starting a game
@@ -402,13 +415,14 @@ func (h *Handler) handleStartGame(socket *gws.Conn, msg *protocol.Message) {
 		h.sendError(socket, 404, err.Error())
 		return
 	}
-	
+
 	if err := r.StartGame(msg.UserID); err != nil {
 		h.sendError(socket, 403, err.Error())
 		return
 	}
-	
+
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // handleMarkCell handles marking a cell
@@ -418,13 +432,13 @@ func (h *Handler) handleMarkCell(socket *gws.Conn, msg *protocol.Message) {
 		h.sendError(socket, 400, "invalid payload")
 		return
 	}
-	
+
 	_, r, err := h.getUserAndRoom(msg.UserID)
 	if err != nil {
 		h.sendError(socket, 404, err.Error())
 		return
 	}
-	
+
 	color := game.PlayerColorFromString(payload.Color)
 	if err := r.MarkCell(msg.UserID, payload.Row, payload.Col, color); err != nil {
 		h.sendError(socket, 403, err.Error())
@@ -432,6 +446,7 @@ func (h *Handler) handleMarkCell(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // handleUnmarkCell handles unmarking a cell
@@ -454,6 +469,7 @@ func (h *Handler) handleUnmarkCell(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // handleClearCellMark handles clearing a specific color mark from a cell
@@ -477,6 +493,7 @@ func (h *Handler) handleClearCellMark(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // handleResetGame handles resetting a game
@@ -486,13 +503,14 @@ func (h *Handler) handleResetGame(socket *gws.Conn, msg *protocol.Message) {
 		h.sendError(socket, 404, err.Error())
 		return
 	}
-	
+
 	if err := r.ResetGame(msg.UserID); err != nil {
 		h.sendError(socket, 403, err.Error())
 		return
 	}
-	
+
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // handleSetCellText handles setting cell text
@@ -523,6 +541,7 @@ func (h *Handler) handleSetCellText(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // handleSettle handles settlement for phase rule
@@ -546,6 +565,7 @@ func (h *Handler) handleSettle(socket *gws.Conn, msg *protocol.Message) {
 	}
 
 	h.broadcastRoomState(r)
+	h.saveRoomState(r)
 }
 
 // sendToSocket sends a message to a socket
@@ -583,7 +603,7 @@ func (h *Handler) broadcastRoomState(r *room.Room) {
 			CurrentUser: "", // Will be set per user
 		}),
 	}
-	
+
 	for _, u := range r.Users {
 		if conn, ok := h.connections.Load(u.ID); ok {
 			msgCopy := msg
@@ -702,6 +722,41 @@ func convertUsers(users []room.UserInfo) []protocol.UserPayload {
 // GetRoomManager returns the room manager for external access
 func (h *Handler) GetRoomManager() *room.Manager {
 	return h.roomManager
+}
+
+// loadRoomsFromStorage loads persisted rooms from storage
+func (h *Handler) loadRoomsFromStorage() {
+	rooms, err := h.storage.LoadAllRooms()
+	if err != nil {
+		log.Printf("Error loading rooms from storage: %v", err)
+		return
+	}
+
+	for _, data := range rooms {
+		// Skip finished games
+		if data.Game.Status == game.StatusFinished {
+			h.storage.DeleteRoom(data.ID)
+			continue
+		}
+
+		// Restore room
+		r := room.RestoreRoom(data.ID, data.Name, data.Password, data.Game)
+		h.roomManager.AddRoom(r)
+	}
+}
+
+// saveRoomState saves room state to storage
+func (h *Handler) saveRoomState(r *room.Room) {
+	if h.storage == nil {
+		return
+	}
+	data := r.GetPersistData()
+	h.storage.SaveRoom(&storage.RoomData{
+		ID:       data.ID,
+		Name:     data.Name,
+		Password: data.Password,
+		Game:     data.Game,
+	})
 }
 
 // Log logs a message
