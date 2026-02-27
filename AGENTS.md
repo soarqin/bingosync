@@ -203,6 +203,17 @@ const { t } = useLocaleStore();
 
 ## Adding New Features
 
+### Protocol Version Policy
+
+**IMPORTANT**: The protocol version must be incremented whenever making incompatible changes to the WebSocket protocol.
+
+- Protocol version is defined in `pkg/protocol/protocol.go` as `ProtocolVersion` (integer)
+- Frontend version is defined in `frontend/src/types/index.ts` as `PROTOCOL_VERSION`
+- Server rejects connections with mismatched versions:
+  - Client version < Server: returns 426 (client_outdated)
+  - Client version > Server: returns 400 (server_outdated)
+- **Always increment both versions together when making breaking changes**
+
 ### Adding a New Message Type
 
 1. **Backend** (`pkg/protocol/protocol.go`):
