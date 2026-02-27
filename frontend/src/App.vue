@@ -56,6 +56,13 @@ const inRoom = computed(() => store.inRoom);
 const game = computed(() => store.game);
 const currentRoom = computed(() => store.currentRoom);
 
+// Reset streamer mode when leaving room
+watch(inRoom, (newVal) => {
+  if (!newVal) {
+    streamerMode.value = false;
+  }
+});
+
 // Settlement related computed properties
 const isCurrentPlayerSettled = computed(() => {
   if (!game.value) return false;
@@ -328,8 +335,8 @@ onMounted(() => {
 
 <template>
   <div id="app">
-    <!-- Header (hidden in streamer mode) -->
-    <header v-if="!streamerMode" class="header">
+    <!-- Header (always show in lobby, hidden in streamer mode when in room) -->
+    <header v-if="!streamerMode || !inRoom" class="header">
       <div class="header-left">
         <h1>BingoSync</h1>
       </div>
@@ -429,7 +436,7 @@ onMounted(() => {
           </div>
           
           <div class="room-actions">
-            <!-- Streamer mode toggle button -->
+            <!-- Streamer mode toggle button (only show when in room) -->
             <button 
               @click="streamerMode = !streamerMode" 
               class="control-btn streamer-btn"
