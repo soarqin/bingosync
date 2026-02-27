@@ -1,4 +1,5 @@
 import type { Message, StateUpdate, RoomInfo, ErrorPayload } from '../types';
+import { PROTOCOL_VERSION } from '../types';
 import { useGameStore } from '../stores/game';
 import { useLocaleStore } from '../stores/locale';
 
@@ -6,7 +7,7 @@ export function useWebSocket() {
   const store = useGameStore();
   const { t } = useLocaleStore();
 
-  function connect(url: string): Promise<void> {
+  async function connect(url: string): Promise<void> {
     return new Promise((resolve, reject) => {
       if (store.ws?.readyState === WebSocket.OPEN) {
         resolve();
@@ -14,7 +15,12 @@ export function useWebSocket() {
       }
 
       store.connecting = true;
-      const socket = new WebSocket(url);
+
+      // Append protocol version to WebSocket URL
+      const wsSep = url.includes('?') ? '&' : '?';
+      const versionedUrl = `${url}${wsSep}v=${PROTOCOL_VERSION}`;
+
+      const socket = new WebSocket(versionedUrl);
 
       socket.onopen = () => {
         store.ws = socket;

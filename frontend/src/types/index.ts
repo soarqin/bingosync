@@ -1,5 +1,8 @@
 // Types for BingoSync
 
+// Protocol version - must match server's ProtocolVersion
+export const PROTOCOL_VERSION = 1;
+
 export type GameRule = 'normal' | 'blackout' | 'phase';
 export type GameStatus = 'waiting' | 'playing' | 'finished';
 export type PlayerColor = 'none' | 'red' | 'blue';

@@ -3,13 +3,16 @@ package main
 import (
 	"bingosync/internal/storage"
 	"bingosync/internal/websocket"
+	"bingosync/pkg/protocol"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 	"time"
 
@@ -41,6 +44,35 @@ func main() {
 	})
 
 	http.HandleFunc("/ws", func(w http.ResponseWriter, r *http.Request) {
+		// Check protocol version from query parameter
+		vStr := r.URL.Query().Get("v")
+		clientVersion := 0
+		if vStr != "" {
+			clientVersion, _ = strconv.Atoi(vStr)
+		}
+
+		if clientVersion < protocol.ProtocolVersion {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUpgradeRequired) // 426
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":          "client_outdated",
+				"message":        "Client version is outdated, please update",
+				"server_version": protocol.ProtocolVersion,
+			})
+			return
+		}
+		if clientVersion > protocol.ProtocolVersion {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest) // 400
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error":          "server_outdated",
+				"message":        "Protocol version mismatch, server needs update",
+				"server_version": protocol.ProtocolVersion,
+			})
+			return
+		}
+
+		// Version matches, proceed with upgrade
 		socket, err := upgrader.Upgrade(w, r)
 		if err != nil {
 			log.Printf("Upgrade error: %v", err)

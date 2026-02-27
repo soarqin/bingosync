@@ -13,6 +13,8 @@ export default {
     serverAddress: 'Server Address',
     pleaseConnect: 'Please connect to server first',
     connectionFailed: 'Connection failed',
+    clientOutdated: 'Client version is outdated, please refresh or update',
+    serverOutdated: 'Server version is outdated, protocol version mismatch',
   },
   room: {
     createRoom: 'Create Room',

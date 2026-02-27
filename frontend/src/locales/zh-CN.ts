@@ -13,6 +13,8 @@ export default {
     serverAddress: '服务器地址',
     pleaseConnect: '请先连接到服务器',
     connectionFailed: '连接失败',
+    clientOutdated: '客户端版本过低，请刷新页面或更新',
+    serverOutdated: '服务器版本过低，协议版本不匹配',
   },
   room: {
     createRoom: '创建房间',

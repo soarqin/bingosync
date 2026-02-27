@@ -127,7 +127,19 @@ async function handleConnect() {
       listRooms();
     } catch (e) {
       console.error('Connection failed:', e);
-      store.setError(t('connection.connectionFailed'));
+      // Check for version errors
+      if (e instanceof Error) {
+        const errStr = e.message || '';
+        if (errStr.includes('client_outdated')) {
+          store.setError(t('connection.clientOutdated'));
+        } else if (errStr.includes('server_outdated')) {
+          store.setError(t('connection.serverOutdated'));
+        } else {
+          store.setError(t('connection.connectionFailed'));
+        }
+      } else {
+        store.setError(t('connection.connectionFailed'));
+      }
     }
   }
 }

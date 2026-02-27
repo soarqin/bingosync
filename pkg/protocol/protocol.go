@@ -2,6 +2,10 @@ package protocol
 
 import "encoding/json"
 
+// ProtocolVersion is the current protocol version
+// Increment this when making incompatible protocol changes
+const ProtocolVersion = 1
+
 // MessageType represents the type of WebSocket message
 type MessageType string
 
