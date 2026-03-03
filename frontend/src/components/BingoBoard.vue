@@ -566,9 +566,9 @@ function handleClick(row: number, col: number) {
   
   // Referee mode: left-click toggles red
   if (store.isReferee) {
-    if (cell.marked_by === 'red') {
-      // Clear red mark
-      emit('mark', row, col, 'none');
+    if (cell.marked_by === 'red' || cell.second_mark === 'red') {
+      // Clear only red mark, preserving any other color
+      clearCellMark(row, col, 'red');
     } else {
       // Mark red
       emit('mark', row, col, 'red');
@@ -601,9 +601,9 @@ function handleRightClick(event: MouseEvent, row: number, col: number) {
   
   // Referee mode: right-click toggles blue
   if (store.isReferee) {
-    if (cell.marked_by === 'blue') {
-      // Clear blue mark
-      emit('mark', row, col, 'none');
+    if (cell.marked_by === 'blue' || cell.second_mark === 'blue') {
+      // Clear only blue mark, preserving any other color
+      clearCellMark(row, col, 'blue');
     } else {
       // Mark blue
       emit('mark', row, col, 'blue');
