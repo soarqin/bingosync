@@ -1,10 +1,10 @@
 <template>
-  <!-- 设置按钮 -->
+  <!-- Settings button -->
   <button class="settings-btn" @click="showDialog = true">
     ⚙️ {{ t('common.settings') }}
   </button>
 
-  <!-- 弹出对话框 -->
+  <!-- Settings dialog -->
   <div v-if="showDialog" class="dialog-overlay" @click.self="showDialog = false">
     <div class="dialog-content">
       <div class="dialog-header">
@@ -142,10 +142,7 @@ watch([() => store.currentRoom, () => props.game?.status, () => store.isOwner],
     
     if (savedRule || savedPhaseConfig) {
       loadSettingsFromStorage();
-      // Apply settings after a short delay to ensure room is ready
-      setTimeout(() => {
-        setRule(selectedRule.value, phaseConfig.value);
-      }, 100);
+      setRule(selectedRule.value, phaseConfig.value);
     }
   },
   { immediate: true }
@@ -336,11 +333,4 @@ function applySettings() {
   padding: 10px;
 }
 
-.restart-btn {
-  background: var(--success-color);
-}
-
-.restart-btn:hover:not(:disabled) {
-  background: var(--success-hover);
-}
 </style>

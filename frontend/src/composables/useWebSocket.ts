@@ -1,4 +1,4 @@
-import type { Message, StateUpdate, RoomInfo, ErrorPayload } from '../types';
+import type { Message, StateUpdate, RoomInfo, ErrorPayload, StreamTokenPayload } from '../types';
 import { PROTOCOL_VERSION } from '../types';
 import { useGameStore } from '../stores/game';
 import { useLocaleStore } from '../stores/locale';
@@ -105,6 +105,13 @@ export function useWebSocket() {
             store.setUserInfo(store.userId, payload.user_name);
           }
           break;
+
+        case 'stream_token':
+          if (msg.payload) {
+            const payload = msg.payload as StreamTokenPayload;
+            store.setStreamToken(payload.token);
+          }
+          break;
       }
     } catch (e) {
       console.error('Failed to parse message:', e);
@@ -186,6 +193,10 @@ export function useWebSocket() {
     send('settle', { player });
   }
 
+  function createStreamToken() {
+    send('create_stream_token');
+  }
+
   return {
     connect,
     disconnect,
@@ -206,5 +217,6 @@ export function useWebSocket() {
     setCellText,
     setAllCellTexts,
     settle,
+    createStreamToken,
   };
 }

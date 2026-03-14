@@ -12,7 +12,8 @@ export const useGameStore = defineStore('game', () => {
   const users = ref<User[]>([]);
   const roomList = ref<RoomInfo[]>([]);
   const error = ref<string | null>(null);
-  
+  const streamToken = ref<string | null>(null);
+
   // WebSocket state (shared across components)
   const ws = ref<WebSocket | null>(null);
   const connecting = ref(false);
@@ -53,6 +54,11 @@ export const useGameStore = defineStore('game', () => {
     currentRoom.value = null;
     game.value = null;
     users.value = [];
+    streamToken.value = null;
+  }
+
+  function setStreamToken(token: string) {
+    streamToken.value = token;
   }
 
   function reset() {
@@ -64,6 +70,7 @@ export const useGameStore = defineStore('game', () => {
     users.value = [];
     roomList.value = [];
     error.value = null;
+    streamToken.value = null;
     ws.value = null;
     connecting.value = false;
   }
@@ -86,6 +93,7 @@ export const useGameStore = defineStore('game', () => {
     users,
     roomList,
     error,
+    streamToken,
     ws,
     connecting,
     // Getters
@@ -104,6 +112,7 @@ export const useGameStore = defineStore('game', () => {
     setStateUpdate,
     setRoomList,
     leaveRoom,
+    setStreamToken,
     reset,
     setError,
     clearError,

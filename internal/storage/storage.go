@@ -4,16 +4,18 @@ import (
 	"bingosync/internal/game"
 	"encoding/json"
 	"log"
+	"time"
 
 	"github.com/dgraph-io/badger/v4"
 )
 
 // RoomData represents the persistable room state
 type RoomData struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Password string     `json:"password"`
-	Game     *game.Game `json:"game"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Password    string     `json:"password"`
+	Game        *game.Game `json:"game"`
+	StreamToken string     `json:"stream_token,omitempty"`
 }
 
 // Storage handles persistence using Badger
@@ -31,7 +33,20 @@ func New(dataDir string) (*Storage, error) {
 		return nil, err
 	}
 
-	return &Storage{db: db}, nil
+	s := &Storage{db: db}
+	go s.runGC()
+	return s, nil
+}
+
+// runGC periodically triggers Badger value-log GC to reclaim disk space.
+func (s *Storage) runGC() {
+	ticker := time.NewTicker(5 * time.Minute)
+	defer ticker.Stop()
+	for range ticker.C {
+		for s.db.RunValueLogGC(0.7) == nil {
+			// Keep running GC until there is nothing left to collect
+		}
+	}
 }
 
 // Close closes the storage

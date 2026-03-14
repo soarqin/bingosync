@@ -74,11 +74,11 @@ func PlayerColorFromString(s string) PlayerColor {
 
 // User represents a connected user
 type User struct {
-	ID          string       `json:"id"`
-	Name        string       `json:"name"`
-	Role        UserRole     `json:"role"`
-	PlayerColor PlayerColor  `json:"player_color"`
-	RoomID      string       `json:"room_id,omitempty"`
+	ID          string      `json:"id"`
+	Name        string      `json:"name"`
+	Role        UserRole    `json:"role"`
+	PlayerColor PlayerColor `json:"player_color"`
+	RoomID      string      `json:"room_id,omitempty"`
 }
 
 // NewUser creates a new user with a random ID
@@ -130,37 +130,4 @@ func (m *Manager) GetUser(userID string) *User {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.users[userID]
-}
-
-// SetUserRole sets the role of a user
-func (m *Manager) SetUserRole(userID string, role UserRole) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if user, ok := m.users[userID]; ok {
-		user.Role = role
-		return true
-	}
-	return false
-}
-
-// SetUserPlayerColor sets the player color of a user
-func (m *Manager) SetUserPlayerColor(userID string, color PlayerColor) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if user, ok := m.users[userID]; ok {
-		user.PlayerColor = color
-		return true
-	}
-	return false
-}
-
-// SetUserRoom sets the room a user is in
-func (m *Manager) SetUserRoom(userID, roomID string) bool {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	if user, ok := m.users[userID]; ok {
-		user.RoomID = roomID
-		return true
-	}
-	return false
 }

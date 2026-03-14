@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bingosync/internal/overlay"
 	"bingosync/internal/storage"
 	"bingosync/internal/websocket"
 	"bingosync/pkg/protocol"
@@ -87,6 +88,67 @@ func main() {
 		w.Write([]byte("OK"))
 	})
 
+	// Overlay HTML page for OBS Browser Source
+	http.HandleFunc("/overlay", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Write(overlay.HTML)
+	})
+
+	// SSE stream endpoint - pushes state_update events to OBS overlay
+	http.HandleFunc("/stream", func(w http.ResponseWriter, r *http.Request) {
+		token := r.URL.Query().Get("token")
+		if token == "" {
+			http.Error(w, "missing token", http.StatusBadRequest)
+			return
+		}
+
+		roomID, ok := handler.ResolveStreamToken(token)
+		if !ok {
+			http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+			return
+		}
+
+		// Set SSE headers
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Header().Set("Connection", "keep-alive")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+
+		flusher, ok := w.(http.Flusher)
+		if !ok {
+			http.Error(w, "streaming not supported", http.StatusInternalServerError)
+			return
+		}
+
+		// Subscribe to room state updates
+		ch, unsubscribe := handler.SubscribeSSE(roomID)
+		defer unsubscribe()
+
+		// Send current state immediately or a not_in_room event
+		if initial := handler.GetRoomState(roomID); initial != nil {
+			fmt.Fprintf(w, "event: state_update\ndata: %s\n\n", initial)
+		} else {
+			fmt.Fprintf(w, "event: not_in_room\ndata: {}\n\n")
+		}
+		flusher.Flush()
+
+		// Stream state updates until client disconnects
+		clientGone := r.Context().Done()
+		for {
+			select {
+			case <-clientGone:
+				return
+			case payload, ok := <-ch:
+				if !ok {
+					return
+				}
+				fmt.Fprintf(w, "event: state_update\ndata: %s\n\n", payload)
+				flusher.Flush()
+			}
+		}
+	})
+
 	addr := fmt.Sprintf(":%d", *port)
 	log.Printf("Starting BingoSync WebSocket server on %s", addr)
 	log.Printf("Data directory: %s", *dataDir)
@@ -94,7 +156,7 @@ func main() {
 
 	server := &http.Server{Addr: addr}
 
-	// Graceful shutdown
+	// Graceful shutdown: store.Close() is handled by defer above
 	go func() {
 		sigCh := make(chan os.Signal, 1)
 		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
@@ -103,7 +165,6 @@ func main() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		server.Shutdown(ctx)
-		store.Close()
 	}()
 
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

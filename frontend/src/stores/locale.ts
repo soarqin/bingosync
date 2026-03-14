@@ -20,7 +20,7 @@ const DEFAULT_LOCALE: LocaleCode = 'en-US';
 // Detect system language and map to supported locale
 function detectSystemLocale(): LocaleCode {
   // Get browser language (e.g., 'zh-CN', 'en-US', 'ja', etc.)
-  const browserLang = navigator.language || (navigator as any).userLanguage;
+  const browserLang = navigator.language;
   
   if (!browserLang) {
     return DEFAULT_LOCALE;

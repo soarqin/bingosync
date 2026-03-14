@@ -31,7 +31,13 @@ const (
 	MsgSetCellText   MessageType = "set_cell_text"
 	MsgSettle        MessageType = "settle"
 
+	// Stream token operations
+	MsgCreateStreamToken MessageType = "create_stream_token"
+	MsgStreamToken       MessageType = "stream_token"
+
 	// Responses/Broadcasts
+	MsgConnected   MessageType = "connected"
+	MsgNameSet     MessageType = "name_set"
 	MsgStateUpdate MessageType = "state_update"
 	MsgRoomList    MessageType = "room_list"
 	MsgError       MessageType = "error"
@@ -190,12 +196,7 @@ type ErrorPayload struct {
 	Message string `json:"message"`
 }
 
-// JoinedPayload represents a user joined notification
-type JoinedPayload struct {
-	User UserPayload `json:"user"`
-}
-
-// LeftPayload represents a user left notification
-type LeftPayload struct {
-	UserID string `json:"user_id"`
+// StreamTokenPayload represents a stream token response
+type StreamTokenPayload struct {
+	Token string `json:"token"`
 }

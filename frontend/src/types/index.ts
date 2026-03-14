@@ -82,6 +82,10 @@ export interface StateUpdate {
   current_user: string;
 }
 
+export interface StreamTokenPayload {
+  token: string;
+}
+
 // Message types
 export type MessageType =
   | 'set_name'
@@ -99,6 +103,8 @@ export type MessageType =
   | 'reset_game'
   | 'set_cell_text'
   | 'settle'
+  | 'create_stream_token'
+  | 'stream_token'
   | 'state_update'
   | 'room_list'
   | 'error'

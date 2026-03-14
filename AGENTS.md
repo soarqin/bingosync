@@ -13,6 +13,7 @@ BingoSync is a real-time multiplayer Bingo game built with Go (backend) and Vue.
 - Light/Dark theme support
 - CSV import/export for board text
 - Streamer mode for OBS/broadcast
+- **OBS Overlay**: SSE-based transparent overlay for OBS Browser Source (`/overlay?token=xxx&lang=xxx`)
 
 ## Project Standards
 
@@ -383,7 +384,7 @@ spectators: User[]
 
 ## Important Notes
 
-1. **Thread Safety**: Backend Room uses `sync.RWMutex` for concurrent access
+1. **Thread Safety**: Backend Room uses `sync.RWMutex` for concurrent access. Lock ordering: `Manager.mu` must always be acquired before `Room.mu` to avoid deadlocks.
 2. **State Sync**: Full state is sent on every change via `state_update`
 3. **Owner Transfer**: When owner leaves, ownership transfers to next user
 4. **Cell Text**: Supports newlines via `\n` character
@@ -394,4 +395,74 @@ spectators: User[]
    - `bingosync-player-name`
    - `bingosync-server-url`
    - `bingosync-streamer-mode`
+7. **OBS Overlay**: Stream tokens are bound to rooms (not users) and are persisted. Rebuilding the server binary re-embeds the overlay HTML — always rebuild after editing `internal/overlay/overlay.html`.
+8. **SSE Subscribers**: Tracked in `Handler.sseSubscribers` (plain `map` protected by `sseSubMu RWMutex`). The `streamTokens` sync.Map is an in-memory index rebuilt from storage on startup.
+
+## OBS Overlay Feature
+
+### Architecture
+
+The overlay uses Server-Sent Events (SSE) instead of WebSocket so OBS Browser Source needs zero interaction:
+
+```
+Wails Desktop  ──WebSocket──▶  Standalone Server (:8765)
+                                  /ws     WebSocket
+                                  /stream SSE push
+                                  /overlay HTML page (embedded)
+
+OBS Browser    ◀──SSE push────  /stream?token=xxx
+Source          (passive, no sends)
+```
+
+### Token Lifecycle
+
+- Token is generated on first `create_stream_token` message for a room
+- Token is bound to the **room**, persisted to storage (Badger)
+- Survives server restarts and user reconnections
+- The same token is returned on subsequent requests for the same room
+- Token is registered in `Handler.streamTokens` (sync.Map) on startup from persisted data
+
+### New WebSocket Message Types
+
+| Type | Direction | Description |
+|------|-----------|-------------|
+| `create_stream_token` | Client → Server | Request/retrieve the room's stream token |
+| `stream_token` | Server → Client | Response with `{ token: string }` |
+
+### New HTTP Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /overlay?token=xxx&lang=xxx` | Serves the OBS overlay HTML page |
+| `GET /stream?token=xxx` | SSE endpoint streaming `state_update` events |
+
+### Overlay Localisation
+
+The overlay HTML (`internal/overlay/overlay.html`) supports `?lang=zh-CN` and `?lang=en-US`.
+The frontend automatically appends the current UI language when copying the OBS URL.
+Supported locale keys in `LOCALES`: `redTeam`, `blueTeam`, `waiting`, `playing`, `finished`, `wins`, `draw`, `connecting`, `notInRoom`, `noToken`.
+
+## Recent Changes (2026-03-14)
+
+### New Features
+- **OBS Overlay via SSE**: Added `/overlay` and `/stream` HTTP endpoints to the standalone server
+- **Stream Token**: New `create_stream_token` / `stream_token` WebSocket message pair; token is room-scoped and persisted (survives server restarts)
+- **Overlay Localisation**: Overlay page supports `?lang=zh-CN` / `?lang=en-US`; frontend copies URL with current locale
+- **Copy OBS URL button**: Added to room action bar; generates/reuses the room's stream token and copies the full overlay URL
+
+### Bug Fixes
+- **Race condition**: `broadcastRoomState` now iterates `state.Users` (snapshot from `GetState()`) instead of `r.Users` directly, eliminating a data race with concurrent room mutations
+- **Double `store.Close()`**: Removed redundant `store.Close()` call in shutdown goroutine that could panic Badger
+- **Missing broadcast on `create_room`**: When a user leaves an old room to create a new one, the old room's members now receive a `state_update`
+- **Silent unmarshal failure**: `broadcastRoomState` now logs and skips on `json.Unmarshal` error instead of sending a zero-value state
+
+### Refactoring
+- **SSE subscriber registry**: Replaced redundant `sync.Map` + `RWMutex` combination with a plain `map` protected solely by `sseSubMu`
+- **Protocol constants**: Added `MsgConnected` and `MsgNameSet` constants; removed unused `JoinedPayload`, `LeftPayload`, and `StreamTokenPayload.URL` field
+- **Dead code removal** (Go): Removed `Handler.Log`, `Handler.GetRoomManager`, `Room.CancelDeletionTimer`, `ErrRoomFull`, `ErrWrongPassword`, `Manager.SetUserRole`, `Manager.SetUserPlayerColor`, `Manager.SetUserRoom`
+- **Dead code removal** (Vue): Removed `handleFileImport`/`handleExport`/`parseCSVLine` from `BingoBoard.vue` (only live in `App.vue`); removed settlement `computed` props and `defineExpose` from `BingoBoard.vue`; removed unused `game` prop from `PlayerPanel.vue`; removed `bingoBoardRef`
+- **App.vue**: Merged two `onMounted` blocks into one; replaced `460px` magic number with `--right-panel-width` CSS variable; fixed `::v-deep` → `:deep()` syntax; replaced polling loop in `handleCopyObsUrl` with a reactive `watch`
+- **Storage GC**: Added periodic Badger value-log GC (`runGC`) to prevent unbounded disk growth
+- **`player.you` locale key**: Added dedicated `you` / `你` translation key; replaced misuse of `connection.yourName` in `PlayerPanel`
+- **IE fallback removed**: Removed `(navigator as any).userLanguage` cast in `locale.ts`
 

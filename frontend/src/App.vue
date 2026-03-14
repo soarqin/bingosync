@@ -25,25 +25,16 @@ const {
   unmarkCell,
   leaveRoom,
   setName,
-  settle
+  settle,
+  createStreamToken,
 } = useWebSocket();
 
 const { t } = localeStore;
 
 const serverUrl = ref('ws://localhost:8765/ws');
 const playerName = ref('');
-const bingoBoardRef = ref<InstanceType<typeof BingoBoard> | null>(null);
-
 // Streamer mode state
 const streamerMode = ref(false);
-
-// Initialize streamer mode from localStorage
-onMounted(() => {
-  const savedMode = localStorage.getItem('bingosync-streamer-mode');
-  if (savedMode !== null) {
-    streamerMode.value = savedMode === 'true';
-  }
-});
 
 // Persist streamer mode to localStorage
 watch(streamerMode, (value) => {
@@ -297,6 +288,52 @@ function handlePlayerSettle() {
   }
 }
 
+// OBS overlay URL copy
+const copyObsUrlSuccess = ref(false);
+
+function buildOverlayUrl(token: string): string {
+  const wsUrl = serverUrl.value || 'ws://localhost:8765/ws';
+  const httpBase = wsUrl
+    .replace(/^wss:\/\//, 'https://')
+    .replace(/^ws:\/\//, 'http://')
+    .replace(/\/ws$/, '');
+  const lang = String(localeStore.locale);
+  return `${httpBase}/overlay?token=${token}&lang=${lang}`;
+}
+
+async function copyUrl(url: string) {
+  try {
+    await navigator.clipboard.writeText(url);
+    copyObsUrlSuccess.value = true;
+    setTimeout(() => { copyObsUrlSuccess.value = false; }, 2000);
+  } catch {
+    // Fallback for environments without clipboard API
+    window.prompt(t('game.copyObsUrlPrompt'), url);
+  }
+}
+
+async function handleCopyObsUrl() {
+  // If the room already has a token, reuse it immediately without a round-trip
+  if (store.streamToken) {
+    await copyUrl(buildOverlayUrl(store.streamToken));
+    return;
+  }
+
+  // No token yet — request one and wait for the server response (stream_token message)
+  createStreamToken();
+  const token = await new Promise<string | null>((resolve) => {
+    const stop = watch(() => store.streamToken, (val) => {
+      if (val) { stop(); resolve(val); }
+    });
+    // Timeout after 3 s in case the server does not respond
+    setTimeout(() => { stop(); resolve(null); }, 3000);
+  });
+
+  if (token) {
+    await copyUrl(buildOverlayUrl(token));
+  }
+}
+
 // Watch for username changes in store, sync to input
 watch(() => store.userName, (newName) => {
   if (newName && !playerName.value) {
@@ -314,13 +351,19 @@ onMounted(() => {
   // Load user preferences
   themeStore.loadTheme();
   localeStore.loadLocale();
-  
+
+  // Load streamer mode preference
+  const savedMode = localStorage.getItem('bingosync-streamer-mode');
+  if (savedMode !== null) {
+    streamerMode.value = savedMode === 'true';
+  }
+
   // Load player name
   const savedName = localStorage.getItem('bingosync-player-name');
   if (savedName) {
     playerName.value = savedName;
   }
-  
+
   // Load server address (prefer localStorage, fallback to Wails backend)
   const savedServerUrl = localStorage.getItem('bingosync-server-url');
   if (savedServerUrl) {
@@ -436,6 +479,14 @@ onMounted(() => {
           </div>
           
           <div class="room-actions">
+            <!-- Copy OBS overlay URL button -->
+            <button
+              @click="handleCopyObsUrl"
+              class="control-btn obs-btn"
+              :title="t('game.copyObsUrl')"
+            >
+              {{ copyObsUrlSuccess ? t('game.copyObsUrlCopied') : t('game.copyObsUrl') }}
+            </button>
             <!-- Streamer mode toggle button (only show when in room) -->
             <button 
               @click="streamerMode = !streamerMode" 
@@ -464,8 +515,7 @@ onMounted(() => {
           <div class="left-panel">
             <h2 class="room-name-above-board">{{ currentRoom?.name }}</h2>
             <BingoBoard
-              v-if="game?.board" 
-              ref="bingoBoardRef"
+              v-if="game?.board"
               :board="game.board" 
               :game="game"
               :streamer-mode="streamerMode"
@@ -475,7 +525,7 @@ onMounted(() => {
           </div>
           
           <div v-if="!streamerMode" class="right-panel">
-            <PlayerPanel :game="game" />
+            <PlayerPanel />
             
             <!-- Control buttons section -->
             <div class="control-section">
@@ -532,6 +582,7 @@ onMounted(() => {
 <style>
 /* CSS Variables for theming */
 :root {
+  --right-panel-width: 460px;
   --bg-primary: #1a1a2e;
   --bg-secondary: #16213e;
   --bg-tertiary: #2a2a4a;
@@ -765,20 +816,20 @@ body {
 /* Left spacer to balance room-actions in flex layout */
 .header-spacer {
   flex-shrink: 0;
-  width: 350px;
+  width: var(--right-panel-width);
 }
 
 .room-actions {
   display: flex;
   align-items: center;
   flex-shrink: 0;
-  width: 350px;
+  width: var(--right-panel-width);
   justify-content: space-between;
 }
 
 .room-actions > button,
 .room-actions > div,
-.room-actions > ::v-deep(button) {
+.room-actions :deep(button) {
   flex: 1;
   padding: 8px 16px;
   white-space: nowrap;
@@ -828,7 +879,7 @@ body {
 .board-controls-header {
   position: absolute;
   left: 0;
-  right: calc(350px + 20px);
+  right: calc(var(--right-panel-width) + 20px);
   top: 50%;
   transform: translateY(-50%);
   display: flex;
@@ -882,7 +933,7 @@ body {
 }
 
 .right-panel {
-  width: 350px;
+  width: var(--right-panel-width);
   flex-shrink: 0;
   display: flex;
   flex-direction: column;
@@ -974,6 +1025,24 @@ body {
 .streamer-btn.active {
   background: var(--accent-color);
   border-color: var(--accent-color);
+}
+
+/* OBS overlay URL copy button */
+.obs-btn {
+  background: var(--bg-tertiary);
+  border: 2px solid transparent;
+  transition: all 0.2s;
+  font-size: 13px;
+}
+
+.obs-btn:hover {
+  background: var(--bg-quaternary);
+  border-color: var(--info-color);
+}
+
+.obs-btn.copied {
+  background: var(--success-color);
+  border-color: var(--success-color);
 }
 
 /* Settlement buttons */

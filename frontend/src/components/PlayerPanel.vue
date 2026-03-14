@@ -51,7 +51,7 @@
         <span>
           {{ user.name }}
           <span v-if="isRoomOwner(user.id)" class="owner-tag">{{ t('room.owner') }}</span>
-          <span v-if="user.id === currentUser?.id" class="you-tag">({{ t('connection.yourName').toLowerCase() }})</span>
+          <span v-if="user.id === currentUser?.id" class="you-tag">({{ t('player.you') }})</span>
         </span>
         <template v-if="isOwner && user.id !== currentUser?.id">
           <button @click="assignRoleToUser(user.id, 'player', 'red')">{{ t('game.red') }}</button>
@@ -78,14 +78,9 @@
 
 <script setup lang="ts">
 import { computed } from 'vue';
-import type { Game } from '../types';
 import { useGameStore } from '../stores/game';
 import { useWebSocket } from '../composables/useWebSocket';
 import { useLocaleStore } from '../stores/locale';
-
-const props = defineProps<{
-  game: Game | null;
-}>();
 
 const store = useGameStore();
 const { setRole } = useWebSocket();
@@ -228,8 +223,8 @@ h3 {
 }
 
 button {
-  padding: 4px 8px;
-  font-size: 12px;
+  padding: 6px 14px;
+  font-size: 14px;
 }
 
 .spectators-section h4 {
@@ -288,8 +283,8 @@ button {
 }
 
 .role-actions button {
-  padding: 6px 12px;
-  font-size: 12px;
+  padding: 8px 16px;
+  font-size: 14px;
 }
 
 .red {

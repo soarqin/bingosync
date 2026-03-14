@@ -12,8 +12,6 @@ import (
 
 var (
 	ErrRoomNotFound     = errors.New("room not found")
-	ErrRoomFull         = errors.New("room is full")
-	ErrWrongPassword    = errors.New("wrong password")
 	ErrNotOwner         = errors.New("only room owner can do this")
 	ErrGameInProgress   = errors.New("game in progress")
 	ErrUserNotFound     = errors.New("user not found")
@@ -22,15 +20,16 @@ var (
 
 // Room represents a game room
 type Room struct {
-	mu         sync.RWMutex
-	ID         string
-	Name       string
-	Password   string
-	OwnerID    string
-	Game       *game.Game
-	Users      map[string]*user.User
-	UserOrder  []string // Order of users for reference
-	emptyTimer *time.Timer
+	mu          sync.RWMutex
+	ID          string
+	Name        string
+	Password    string
+	OwnerID     string
+	Game        *game.Game
+	Users       map[string]*user.User
+	UserOrder   []string // Order of users for reference
+	StreamToken string   // Persistent SSE stream token for this room
+	emptyTimer  *time.Timer
 }
 
 // NewRoom creates a new room
@@ -391,10 +390,11 @@ type RoomState struct {
 
 // PersistData represents data for persistence (no users)
 type PersistData struct {
-	ID       string     `json:"id"`
-	Name     string     `json:"name"`
-	Password string     `json:"password"`
-	Game     *game.Game `json:"game"`
+	ID          string     `json:"id"`
+	Name        string     `json:"name"`
+	Password    string     `json:"password"`
+	Game        *game.Game `json:"game"`
+	StreamToken string     `json:"stream_token,omitempty"`
 }
 
 // GetPersistData returns data for persistence
@@ -402,11 +402,26 @@ func (r *Room) GetPersistData() *PersistData {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 	return &PersistData{
-		ID:       r.ID,
-		Name:     r.Name,
-		Password: r.Password,
-		Game:     r.Game,
+		ID:          r.ID,
+		Name:        r.Name,
+		Password:    r.Password,
+		Game:        r.Game,
+		StreamToken: r.StreamToken,
 	}
+}
+
+// SetStreamToken sets the room's stream token
+func (r *Room) SetStreamToken(token string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.StreamToken = token
+}
+
+// GetStreamToken returns the room's stream token
+func (r *Room) GetStreamToken() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.StreamToken
 }
 
 // Manager manages all rooms
@@ -492,15 +507,16 @@ func generateRoomID() string {
 }
 
 // RestoreRoom creates a room from persisted data
-func RestoreRoom(id, name, password string, g *game.Game) *Room {
+func RestoreRoom(id, name, password, streamToken string, g *game.Game) *Room {
 	return &Room{
-		ID:        id,
-		Name:      name,
-		Password:  password,
-		OwnerID:   "",
-		Game:      g,
-		Users:     make(map[string]*user.User),
-		UserOrder: []string{},
+		ID:          id,
+		Name:        name,
+		Password:    password,
+		OwnerID:     "",
+		Game:        g,
+		Users:       make(map[string]*user.User),
+		UserOrder:   []string{},
+		StreamToken: streamToken,
 	}
 }
 
@@ -581,15 +597,5 @@ func (m *Manager) deleteIfEmpty(id string) {
 		if m.onDelete != nil {
 			m.onDelete(id, false)
 		}
-	}
-}
-
-// CancelDeletionTimer cancels the room's deletion timer if exists
-func (r *Room) CancelDeletionTimer() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if r.emptyTimer != nil {
-		r.emptyTimer.Stop()
-		r.emptyTimer = nil
 	}
 }

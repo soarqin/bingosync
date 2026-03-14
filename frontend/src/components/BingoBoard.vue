@@ -76,7 +76,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, watch, nextTick, inject, type Ref, onMounted, onUnmounted } from 'vue';
+import { ref, computed, watch, nextTick, onMounted, onUnmounted } from 'vue';
 import type { Game, Board, PlayerColor } from '../types';
 import { useGameStore } from '../stores/game';
 import { useWebSocket } from '../composables/useWebSocket';
@@ -106,7 +106,7 @@ const emit = defineEmits<{
 }>();
 
 const store = useGameStore();
-const { setCellText, setAllCellTexts, startGame, settle, clearCellMark } = useWebSocket();
+const { setCellText, setAllCellTexts, clearCellMark } = useWebSocket();
 const { t } = useLocaleStore();
 
 // Update cell size based on actual rendered cell
@@ -137,11 +137,9 @@ onMounted(() => {
     });
   };
   
-  // Try immediately and after delays
+  // Try immediately; ResizeObserver will handle subsequent layout changes
   initUpdate();
-  setTimeout(initUpdate, 100);
-  setTimeout(initUpdate, 300);
-  
+
   // Use ResizeObserver to update cell size when board resizes
   if (boardRef.value) {
     resizeObserver = new ResizeObserver(() => {
@@ -359,9 +357,9 @@ const canMark = computed(() => {
   return false;
 });
 
-const redCount = computed(() => calculateScores().red);
-
-const blueCount = computed(() => calculateScores().blue);
+const scores = computed(() => calculateScores());
+const redCount = computed(() => scores.value.red);
+const blueCount = computed(() => scores.value.blue);
 
 // Get player names for score display
 const redPlayerName = computed(() => {
@@ -439,46 +437,6 @@ function calculatePhaseScore(color: 'red' | 'blue'): number {
   return score;
 }
 
-// Phase rule: check if current player can settle
-const canSettle = computed(() => {
-  if (!props.game || props.game.rule !== 'phase') return false;
-  if (props.game.status !== 'playing') return false;
-  return store.isPlayer || store.isReferee;
-});
-
-// Check if current player has already settled
-const isCurrentPlayerSettled = computed(() => {
-  if (!props.game) return false;
-  const color = store.currentUser?.player_color;
-  if (color === 'red') return props.game.red_settled ?? false;
-  if (color === 'blue') return props.game.blue_settled ?? false;
-  return false;
-});
-
-// Check if player meets settlement conditions (>= 2 cells in row 5)
-const canSettleNow = computed(() => {
-  if (!props.game) return false;
-  const color = store.currentUser?.player_color;
-  if (color === 'red') {
-    return (props.game.red_row_marks?.[4] ?? 0) >= 2;
-  }
-  if (color === 'blue') {
-    return (props.game.blue_row_marks?.[4] ?? 0) >= 2;
-  }
-  return false;
-});
-
-// For referee: check if each player can settle
-const canRedSettle = computed(() => {
-  if (!props.game) return false;
-  return (props.game.red_row_marks?.[4] ?? 0) >= 2;
-});
-
-const canBlueSettle = computed(() => {
-  if (!props.game) return false;
-  return (props.game.blue_row_marks?.[4] ?? 0) >= 2;
-});
-
 function handleSettle() {
   const color = store.currentUser?.player_color;
   if (color && color !== 'none') {
@@ -489,17 +447,6 @@ function handleSettle() {
 function handleRefereeSettle(color: 'red' | 'blue') {
   emit('settle', color);
 }
-
-// Expose settle-related properties and methods to parent component
-defineExpose({
-  canSettle,
-  isCurrentPlayerSettled,
-  canSettleNow,
-  canRedSettle,
-  canBlueSettle,
-  handleSettle,
-  handleRefereeSettle
-});
 
 function isLocked(row: number): boolean {
   if (!props.game || props.game.rule !== 'phase') return false;
@@ -619,113 +566,7 @@ function saveEditText() {
   showEditDialog.value = false;
 }
 
-async function handleFileImport(event: Event) {
-  const file = (event.target as HTMLInputElement).files?.[0];
-  if (!file) return;
-  
-  try {
-    const text = await file.text();
-    let texts: string[] = [];
-    
-    if (file.name.toLowerCase().endsWith('.txt')) {
-      // TXT: one per line, 25 lines total (supports \\n for cell line breaks)
-      const lines = text.split('\n').map(line => {
-        // Convert \\n to actual newline character
-        return line.trim().replace(/\\n/g, '\n');
-      }).filter(line => line.length > 0);
-      texts = lines.slice(0, 25);
-    } else if (file.name.toLowerCase().endsWith('.csv')) {
-      // CSV: 5 per line, 5 lines total (supports quoted text with line breaks)
-      const lines = text.split('\n').slice(0, 5);
-      for (const line of lines) {
-        const cols = parseCSVLine(line);
-        texts.push(...cols.slice(0, 5));
-      }
-    }
-    
-    // Ensure 25 elements
-    while (texts.length < 25) {
-      texts.push('');
-    }
-    texts = texts.slice(0, 25);
-    
-    setAllCellTexts(texts);
-  } catch (e) {
-    console.error('Failed to import file:', e);
-    store.setError(t('settings.importFailed'));
-  }
-  
-  // Reset file input
-  (event.target as HTMLInputElement).value = '';
-}
 
-// Parse CSV line, supports quoted text
-function parseCSVLine(line: string): string[] {
-  const result: string[] = [];
-  let current = '';
-  let inQuotes = false;
-  
-  for (let i = 0; i < line.length; i++) {
-    const char = line[i];
-    
-    if (char === '"') {
-      if (inQuotes && line[i + 1] === '"') {
-        // Escaped quote
-        current += '"';
-        i++;
-      } else {
-        // Toggle quote state
-        inQuotes = !inQuotes;
-      }
-    } else if (char === ',' && !inQuotes) {
-      result.push(current.trim());
-      current = '';
-    } else {
-      current += char;
-    }
-  }
-  
-  result.push(current.trim());
-  return result;
-}
-
-function handleExport() {
-  // Collect all cell texts
-  const texts: string[] = [];
-  for (const row of props.board.cells) {
-    for (const cell of row) {
-      texts.push(cell.text || '');
-    }
-  }
-  
-  // Generate CSV content (using quotes to support line breaks)
-  const csvLines: string[] = [];
-  for (let i = 0; i < 5; i++) {
-    const rowTexts = texts.slice(i * 5, (i + 1) * 5);
-    const csvRow = rowTexts.map(text => {
-      // If text contains comma, quote or newline, wrap with quotes
-      if (text.includes(',') || text.includes('"') || text.includes('\n')) {
-        // Escape quotes
-        return '"' + text.replace(/"/g, '""') + '"';
-      }
-      return text;
-    }).join(',');
-    csvLines.push(csvRow);
-  }
-  
-  const csvContent = csvLines.join('\n');
-  
-  // Create and download file
-  const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = 'bingo-board.csv';
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-}
 </script>
 
 <style scoped>
@@ -733,8 +574,12 @@ function handleExport() {
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 20px;
+  gap: 15px;
   position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  box-sizing: border-box;
 }
 
 /* Bingo badge displayed next to player name */
@@ -795,7 +640,7 @@ function handleExport() {
   color: var(--warning-color);
 }
 
-/* 编辑文字对话框 */
+/* Edit cell text dialog */
 .dialog-overlay {
   position: fixed;
   top: 0;
@@ -857,17 +702,6 @@ function handleExport() {
 
 .dialog-actions .save-btn:hover {
   background: var(--success-hover);
-}
-
-.bingo-board {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 15px;
-  width: 100%;
-  height: 100%;
-  min-height: 0;
-  box-sizing: border-box;
 }
 
 .board {

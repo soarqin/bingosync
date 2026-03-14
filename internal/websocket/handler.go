@@ -6,6 +6,8 @@ import (
 	"bingosync/internal/storage"
 	"bingosync/internal/user"
 	"bingosync/pkg/protocol"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"log"
@@ -15,19 +17,28 @@ import (
 	"github.com/lxzan/gws"
 )
 
+// sseSubscriber represents a single SSE connection subscriber
+type sseSubscriber struct {
+	ch chan []byte
+}
+
 // Handler handles WebSocket connections
 type Handler struct {
-	userManager *user.Manager
-	roomManager *room.Manager
-	storage     *storage.Storage
-	connections sync.Map // userID -> *gws.Conn
+	userManager    *user.Manager
+	roomManager    *room.Manager
+	storage        *storage.Storage
+	connections    sync.Map                    // userID -> *gws.Conn
+	streamTokens   sync.Map                    // token -> roomID (in-memory index for fast lookup)
+	sseSubscribers map[string][]*sseSubscriber // roomID -> subscribers
+	sseSubMu       sync.RWMutex                // protects sseSubscribers
 }
 
 // NewHandler creates a new WebSocket handler
 func NewHandler(store *storage.Storage, emptyTTL time.Duration) *Handler {
 	h := &Handler{
-		userManager: user.NewManager(),
-		storage:     store,
+		userManager:    user.NewManager(),
+		storage:        store,
+		sseSubscribers: make(map[string][]*sseSubscriber),
 	}
 
 	h.roomManager = room.NewManager(emptyTTL, func(id string, immediate bool) {
@@ -56,7 +67,7 @@ func (h *Handler) OnOpen(socket *gws.Conn) {
 
 	// Send welcome message with user ID
 	h.sendToSocket(socket, protocol.Message{
-		Type:   "connected",
+		Type:   protocol.MsgConnected,
 		UserID: u.ID,
 		Payload: mustMarshal(map[string]string{
 			"user_id":   u.ID,
@@ -138,6 +149,8 @@ func (h *Handler) OnMessage(socket *gws.Conn, message *gws.Message) {
 		h.handleSetCellText(socket, &msg)
 	case protocol.MsgSettle:
 		h.handleSettle(socket, &msg)
+	case protocol.MsgCreateStreamToken:
+		h.handleCreateStreamToken(socket, &msg)
 	default:
 		h.sendError(socket, 400, "unknown message type")
 	}
@@ -180,7 +193,7 @@ func (h *Handler) handleSetName(socket *gws.Conn, msg *protocol.Message) {
 
 	// Send confirmation
 	h.sendToSocket(socket, protocol.Message{
-		Type: "name_set",
+		Type: protocol.MsgNameSet,
 		Payload: mustMarshal(map[string]string{
 			"user_name": u.Name,
 		}),
@@ -201,12 +214,13 @@ func (h *Handler) handleCreateRoom(socket *gws.Conn, msg *protocol.Message) {
 		return
 	}
 
-	// Leave current room if in one
+	// Leave current room if in one, and broadcast the departure to remaining members
 	if u.RoomID != "" {
 		oldRoom := h.roomManager.GetRoom(u.RoomID)
 		if oldRoom != nil {
 			oldRoom.RemoveUser(msg.UserID)
 			h.roomManager.ScheduleDeleteIfEmpty(oldRoom.ID)
+			h.broadcastRoomState(oldRoom)
 		}
 	}
 
@@ -585,35 +599,49 @@ func (h *Handler) sendError(socket *gws.Conn, code int, message string) {
 	})
 }
 
-// broadcastRoomState broadcasts the room state to all users in the room
+// broadcastRoomState broadcasts the room state to all users in the room and SSE subscribers.
+// It uses r.GetState() to obtain a consistent snapshot under the room's read lock,
+// avoiding direct iteration of r.Users which would be a data race.
 func (h *Handler) broadcastRoomState(r *room.Room) {
 	state := r.GetState()
-	msg := protocol.Message{
-		Type:   protocol.MsgStateUpdate,
-		RoomID: r.ID,
-		Payload: mustMarshal(protocol.StateUpdatePayload{
-			Room: protocol.RoomPayload{
-				ID:          state.ID,
-				Name:        state.Name,
-				OwnerID:     state.OwnerID,
-				HasPassword: state.HasPassword,
-			},
-			Game:        convertGame(state.Game),
-			Users:       convertUsers(state.Users),
-			CurrentUser: "", // Will be set per user
-		}),
+
+	basePayload := protocol.StateUpdatePayload{
+		Room: protocol.RoomPayload{
+			ID:          state.ID,
+			Name:        state.Name,
+			OwnerID:     state.OwnerID,
+			HasPassword: state.HasPassword,
+		},
+		Game:        convertGame(state.Game),
+		Users:       convertUsers(state.Users),
+		CurrentUser: "", // Will be set per user
 	}
 
-	for _, u := range r.Users {
+	basePayloadBytes := mustMarshal(basePayload)
+
+	msg := protocol.Message{
+		Type:    protocol.MsgStateUpdate,
+		RoomID:  r.ID,
+		Payload: basePayloadBytes,
+	}
+
+	// Send to WebSocket users using the snapshot from GetState()
+	for _, u := range state.Users {
 		if conn, ok := h.connections.Load(u.ID); ok {
 			msgCopy := msg
-			payload := protocol.StateUpdatePayload{}
-			json.Unmarshal(msgCopy.Payload, &payload)
+			var payload protocol.StateUpdatePayload
+			if err := json.Unmarshal(basePayloadBytes, &payload); err != nil {
+				log.Printf("broadcastRoomState: unmarshal error for user %s: %v", u.ID, err)
+				continue
+			}
 			payload.CurrentUser = u.ID
 			msgCopy.Payload = mustMarshal(payload)
 			h.sendToSocket(conn.(*gws.Conn), msgCopy)
 		}
 	}
+
+	// Push to SSE subscribers for this room
+	h.pushToSSESubscribers(r.ID, basePayloadBytes)
 }
 
 // Helper functions
@@ -719,11 +747,6 @@ func convertUsers(users []room.UserInfo) []protocol.UserPayload {
 	return result
 }
 
-// GetRoomManager returns the room manager for external access
-func (h *Handler) GetRoomManager() *room.Manager {
-	return h.roomManager
-}
-
 // loadRoomsFromStorage loads persisted rooms from storage
 func (h *Handler) loadRoomsFromStorage() {
 	rooms, err := h.storage.LoadAllRooms()
@@ -739,9 +762,14 @@ func (h *Handler) loadRoomsFromStorage() {
 			continue
 		}
 
-		// Restore room
-		r := room.RestoreRoom(data.ID, data.Name, data.Password, data.Game)
+		// Restore room (including its stream token)
+		r := room.RestoreRoom(data.ID, data.Name, data.Password, data.StreamToken, data.Game)
 		h.roomManager.AddRoom(r)
+
+		// Rebuild in-memory token index
+		if data.StreamToken != "" {
+			h.streamTokens.Store(data.StreamToken, data.ID)
+		}
 	}
 }
 
@@ -752,14 +780,120 @@ func (h *Handler) saveRoomState(r *room.Room) {
 	}
 	data := r.GetPersistData()
 	h.storage.SaveRoom(&storage.RoomData{
-		ID:       data.ID,
-		Name:     data.Name,
-		Password: data.Password,
-		Game:     data.Game,
+		ID:          data.ID,
+		Name:        data.Name,
+		Password:    data.Password,
+		Game:        data.Game,
+		StreamToken: data.StreamToken,
 	})
 }
 
-// Log logs a message
-func (h *Handler) Log(format string, args ...interface{}) {
-	log.Printf(format, args...)
+// handleCreateStreamToken returns (or creates) a persistent stream token for the room.
+// The token is bound to the room, not the user, so it survives server restarts
+// and user reconnections as long as the room exists.
+func (h *Handler) handleCreateStreamToken(socket *gws.Conn, msg *protocol.Message) {
+	_, r, err := h.getUserAndRoom(msg.UserID)
+	if err != nil {
+		h.sendError(socket, 404, err.Error())
+		return
+	}
+
+	// Reuse existing room token if available
+	token := r.GetStreamToken()
+	if token == "" {
+		// Generate a new random token (16 bytes = 32 hex chars)
+		tokenBytes := make([]byte, 16)
+		if _, randErr := rand.Read(tokenBytes); randErr != nil {
+			h.sendError(socket, 500, "failed to generate token")
+			return
+		}
+		token = hex.EncodeToString(tokenBytes)
+
+		// Persist token on room and save to storage
+		r.SetStreamToken(token)
+		h.saveRoomState(r)
+	}
+
+	// Ensure in-memory index is up to date
+	h.streamTokens.Store(token, r.ID)
+
+	h.sendToSocket(socket, protocol.Message{
+		Type:    protocol.MsgStreamToken,
+		Payload: mustMarshal(protocol.StreamTokenPayload{Token: token}),
+	})
+}
+
+// ResolveStreamToken validates a token and returns the roomID it maps to
+func (h *Handler) ResolveStreamToken(token string) (string, bool) {
+	roomID, ok := h.streamTokens.Load(token)
+	if !ok {
+		return "", false
+	}
+	return roomID.(string), true
+}
+
+// SubscribeSSE registers an SSE subscriber for a room and returns a receive channel.
+// The returned unsubscribe function must be called when the connection closes.
+func (h *Handler) SubscribeSSE(roomID string) (chan []byte, func()) {
+	sub := &sseSubscriber{ch: make(chan []byte, 32)}
+
+	h.sseSubMu.Lock()
+	h.sseSubscribers[roomID] = append(h.sseSubscribers[roomID], sub)
+	h.sseSubMu.Unlock()
+
+	unsubscribe := func() {
+		h.sseSubMu.Lock()
+		defer h.sseSubMu.Unlock()
+		list := h.sseSubscribers[roomID]
+		newList := make([]*sseSubscriber, 0, len(list))
+		for _, s := range list {
+			if s != sub {
+				newList = append(newList, s)
+			}
+		}
+		if len(newList) == 0 {
+			delete(h.sseSubscribers, roomID)
+		} else {
+			h.sseSubscribers[roomID] = newList
+		}
+	}
+
+	return sub.ch, unsubscribe
+}
+
+// pushToSSESubscribers sends a serialized payload to all SSE subscribers of a room.
+// Uses a non-blocking send to avoid stalling the broadcast on a slow subscriber.
+func (h *Handler) pushToSSESubscribers(roomID string, payload []byte) {
+	h.sseSubMu.RLock()
+	list := h.sseSubscribers[roomID]
+	h.sseSubMu.RUnlock()
+
+	for _, sub := range list {
+		select {
+		case sub.ch <- payload:
+		default:
+		}
+	}
+}
+
+// GetRoomState returns the current state of a room as a serialized StateUpdatePayload.
+// Returns nil if the room does not exist.
+func (h *Handler) GetRoomState(roomID string) []byte {
+	r := h.roomManager.GetRoom(roomID)
+	if r == nil {
+		return nil
+	}
+	state := r.GetState()
+	payload := protocol.StateUpdatePayload{
+		Room: protocol.RoomPayload{
+			ID:          state.ID,
+			Name:        state.Name,
+			OwnerID:     state.OwnerID,
+			HasPassword: state.HasPassword,
+		},
+		Game:        convertGame(state.Game),
+		Users:       convertUsers(state.Users),
+		CurrentUser: "",
+	}
+	return mustMarshal(payload)
 }
