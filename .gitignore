@@ -55,3 +55,7 @@ tmp/
 temp/
 *.tmp
 /data/
+
+# Agent folders
+/.sisyphus/
+/.omo/
