@@ -31,7 +31,7 @@ const {
 
 const { t } = localeStore;
 
-const serverUrl = ref('ws://localhost:8765/ws');
+const serverUrl = ref('ws://soar.im:8765/ws');
 const playerName = ref('');
 // Streamer mode state
 const streamerMode = ref(false);
@@ -292,7 +292,7 @@ function handlePlayerSettle() {
 const copyObsUrlSuccess = ref(false);
 
 function buildOverlayUrl(token: string): string {
-  const wsUrl = serverUrl.value || 'ws://localhost:8765/ws';
+  const wsUrl = serverUrl.value || 'ws://soar.im:8765/ws';
   const httpBase = wsUrl
     .replace(/^wss:\/\//, 'https://')
     .replace(/^ws:\/\//, 'http://')
