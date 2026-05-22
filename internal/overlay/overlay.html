@@ -242,21 +242,112 @@
   // ── Helpers ──────────────────────────────────────────
   function el(id) { return document.getElementById(id); }
 
-  // Calculate optimal font size for a cell given its text and rendered size
+  // Calculate estimated width of a string (in font-size units).
+  // Mirrors estimateTextWidth() in BingoBoard.vue.
+  function estimateTextWidth(text) {
+    var width = 0;
+    for (var i = 0; i < text.length; i++) {
+      var code = text.charCodeAt(i);
+      var ch   = text[i];
+      if (code >= 0x4e00 && code <= 0x9fff) {
+        width += 1.0; // Chinese
+      } else if (code >= 0x3040 && code <= 0x30ff) {
+        width += 1.0; // Japanese
+      } else if (code >= 0xac00 && code <= 0xd7af) {
+        width += 1.0; // Korean
+      } else if (code >= 0x00 && code <= 0x7f) {
+        if (ch === '\n') {
+          // newline has no width
+        } else if (ch >= '0' && ch <= '9') {
+          width += 0.6;
+        } else if ((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')) {
+          width += 0.65;
+        } else {
+          width += 0.5;
+        }
+      } else {
+        width += 1.2; // emoji / other wide chars
+      }
+    }
+    return width;
+  }
+
+  // Split text into words, treating CJK characters as individual units.
+  // Mirrors splitIntoWords() in BingoBoard.vue.
+  function splitIntoWords(text) {
+    var words = [];
+    var currentLatin = '';
+    for (var i = 0; i < text.length; i++) {
+      var code = text.charCodeAt(i);
+      var isCJK = (code >= 0x4e00 && code <= 0x9fff) ||
+                  (code >= 0x3040 && code <= 0x30ff) ||
+                  (code >= 0xac00 && code <= 0xd7af) ||
+                  (code >= 0xff00 && code <= 0xffef);
+      if (isCJK) {
+        if (currentLatin) { words.push(currentLatin); currentLatin = ''; }
+        words.push(text[i]);
+      } else {
+        currentLatin += text[i];
+      }
+    }
+    if (currentLatin) words.push(currentLatin);
+    return words;
+  }
+
+  // Calculate the number of wrapped lines for a given font size and available width.
+  // Mirrors calculateWrappedLines() in BingoBoard.vue.
+  function calculateWrappedLines(text, fontSize, availableWidth) {
+    var explicitLines = text.split('\n');
+    var totalLines = 0;
+    var maxLineWidth = availableWidth / fontSize;
+
+    for (var li = 0; li < explicitLines.length; li++) {
+      var line = explicitLines[li];
+      if (line.length === 0) { totalLines += 1; continue; }
+
+      var words = splitIntoWords(line);
+      var currentLineWidth = 0;
+      var lineCount = 1;
+
+      for (var wi = 0; wi < words.length; wi++) {
+        var wordWidth = estimateTextWidth(words[wi]);
+        if (wordWidth > maxLineWidth) {
+          var wordLines = Math.ceil(wordWidth / maxLineWidth);
+          if (currentLineWidth > 0) {
+            lineCount += wordLines;
+          } else {
+            lineCount += wordLines - 1;
+          }
+          currentLineWidth = wordWidth % maxLineWidth;
+          if (currentLineWidth === 0) currentLineWidth = maxLineWidth;
+        } else if (currentLineWidth + wordWidth <= maxLineWidth) {
+          currentLineWidth += wordWidth;
+        } else {
+          lineCount++;
+          currentLineWidth = wordWidth;
+        }
+      }
+      totalLines += Math.max(1, lineCount);
+    }
+    return totalLines;
+  }
+
+  // Calculate optimal font size for a cell given its text and rendered size.
+  // Uses the same binary-search algorithm as BingoBoard.vue for consistent rendering.
   function calcFontSize(text, cellPx) {
-    if (!text) return 14;
-    var MAX = 18, MIN = 7;
-    var pad = 4, lh = 1.3, safety = 0.88;
-    var inner = (cellPx - pad * 2) * safety;
-    var charW = 0.55; // approximate char width ratio
-    var len = text.length;
-    // Width-based estimate
-    var chars = Math.max(1, Math.sqrt(len * 1.2));
-    var fsByW = inner / (chars * charW);
-    // Height-based estimate
-    var lines = Math.ceil(len / Math.max(1, chars));
-    var fsByH = inner / (lines * lh);
-    return Math.min(MAX, Math.max(MIN, Math.floor(Math.min(fsByW, fsByH))));
+    if (!text) return 18;
+    var MAX = 18, MIN = 7, LH = 1.3, PAD = 4, SAFETY = 0.88;
+    var available = (cellPx - PAD * 2) * SAFETY;
+
+    var low = MIN, high = MAX, best = MIN;
+    while (high - low > 0.5) {
+      var mid = (low + high) / 2;
+      var lines = calculateWrappedLines(text, mid, available);
+      var totalH = lines * mid * LH;
+      if (totalH <= available) { best = mid; low = mid; }
+      else { high = mid; }
+    }
+    return Math.round(best);
   }
 
   // ── State ─────────────────────────────────────────────
